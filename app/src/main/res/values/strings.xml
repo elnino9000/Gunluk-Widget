@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Günlük Widget</string>
+    <string name="widget_desc">Gün ışığı yayı, saat, hava ve güvenilir haber başlıkları</string>
+</resources>
