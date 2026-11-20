@@ -15,9 +15,22 @@ android {
         versionName "1.0"
     }
 
+    signingConfigs {
+        gunluk {
+            storeFile file('gunluk.keystore')
+            storePassword 'android'
+            keyAlias 'gunluk'
+            keyPassword 'android'
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig signingConfigs.gunluk
+        }
         release {
             minifyEnabled false
+            signingConfig signingConfigs.gunluk
         }
     }
 
