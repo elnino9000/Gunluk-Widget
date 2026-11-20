@@ -9,10 +9,10 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import android.provider.AlarmClock
 import android.util.TypedValue
 import android.widget.RemoteViews
 import kotlin.concurrent.thread
-import kotlin.math.min
 
 class WidgetProvider : AppWidgetProvider() {
 
@@ -104,21 +104,54 @@ class WidgetProvider : AppWidgetProvider() {
                 val rv = RemoteViews(ctx.packageName, R.layout.widget)
                 rv.setImageViewBitmap(R.id.bg, bmp)
 
-                // saat ve tarih: büyük, widget boyutuna göre
-                val timeDp = min(hDp * 0.30f, wDp * 0.20f)
-                val dateDp = (hDp * 0.095f).coerceIn(11f, 17f)
-                rv.setTextViewTextSize(R.id.time, TypedValue.COMPLEX_UNIT_DIP, timeDp)
-                rv.setTextViewTextSize(R.id.date, TypedValue.COMPLEX_UNIT_DIP, dateDp)
-                rv.setViewPadding(R.id.top_area, 0, 0, 0, (hDp * 0.05f * dens).toInt())
+                // tasarım tuvalinin görünümdeki yeri (bitmap ile aynı oranlar)
+                val vw = (wDp * dens).toInt().coerceAtLeast(200)
+                val vh = (hDp * dens).toInt().coerceAtLeast(100)
+                val m = Renderer.metrics(vw, vh)
+                val u = m.u
+                val th = Renderer.themeOf(st, System.currentTimeMillis())
 
-                // dokununca yenile
+                // saat ve tarih canlı TextClock; konumları tasarımdaki yazı tabanına göre
+                val asc = 0.93f // yazı tipi yukarı payı (em)
+                val timePx = Renderer.TIME_SIZE * u
+                val datePx = Renderer.DATE_SIZE * u
+                rv.setTextViewTextSize(R.id.time, TypedValue.COMPLEX_UNIT_PX, timePx)
+                rv.setTextViewTextSize(R.id.date, TypedValue.COMPLEX_UNIT_PX, datePx)
+                rv.setTextColor(R.id.time, th.text)
+                rv.setTextColor(R.id.date, th.accent)
+
+                // dokunma alanı geniş olsun diye yazının çevresine boşluk; kutudan düşülür
+                val pad = (7f * u).toInt()
+                rv.setViewPadding(R.id.time, pad, pad, pad, pad)
+                rv.setViewPadding(R.id.date, pad, pad, pad, pad)
+                val timeL = (m.ox + Renderer.TIME_X * u).toInt() - pad
+                val timeT = (m.oy + (Renderer.TIME_BASE - asc * Renderer.TIME_SIZE) * u).toInt() - pad
+                val dateL = (m.ox + Renderer.DATE_X * u).toInt() - pad
+                val dateT = (m.oy + (Renderer.DATE_BASE - asc * Renderer.DATE_SIZE) * u).toInt() - pad
+                rv.setViewPadding(R.id.time_box, timeL.coerceAtLeast(0), timeT.coerceAtLeast(0), 0, 0)
+                rv.setViewPadding(R.id.date_box, dateL.coerceAtLeast(0), dateT.coerceAtLeast(0), 0, 0)
+
+                // dokunma: saat -> saat/alarmlar, tarih -> takvim, diğer yerler -> yenile
+                val flags = PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
                 val refreshPi = PendingIntent.getBroadcast(
                     ctx, 1,
                     Intent(ctx, WidgetProvider::class.java).setAction(ACTION_REFRESH),
-                    PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+                    flags
                 )
-                rv.setOnClickPendingIntent(R.id.top_area, refreshPi)
-                rv.setOnClickPendingIntent(R.id.ground_hit, refreshPi)
+                val clockPi = PendingIntent.getActivity(
+                    ctx, 2,
+                    Intent(AlarmClock.ACTION_SHOW_ALARMS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                    flags
+                )
+                val calPi = PendingIntent.getActivity(
+                    ctx, 3,
+                    Intent.makeMainSelectorActivity(Intent.ACTION_MAIN, Intent.CATEGORY_APP_CALENDAR)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                    flags
+                )
+                rv.setOnClickPendingIntent(R.id.bg, refreshPi)
+                rv.setOnClickPendingIntent(R.id.time, clockPi)
+                rv.setOnClickPendingIntent(R.id.date, calPi)
 
                 mgr.updateAppWidget(id, rv)
             }

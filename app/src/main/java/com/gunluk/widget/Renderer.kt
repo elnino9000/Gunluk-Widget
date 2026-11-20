@@ -3,45 +3,64 @@ package com.gunluk.widget
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.DashPathEffect
-import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Path
-import android.graphics.PorterDuff
-import android.graphics.PorterDuffXfermode
-import android.graphics.RadialGradient
 import android.graphics.RectF
-import android.graphics.Shader
 import android.graphics.Typeface
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
-import java.util.Random
 import kotlin.math.PI
-import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.min
 import kotlin.math.sin
 import kotlin.math.sqrt
 
-class Phase(val day: Boolean, val p: Float, val sunrise: Long, val sunset: Long) {
-    /** -1 (gece yarısı) ... 0 (ufuk) ... +1 (öğle) */
-    val alt: Float = if (day) sin(PI * p).toFloat() else -sin(PI * p).toFloat()
+class Phase(val day: Boolean, val p: Float, val sunrise: Long, val sunset: Long)
+
+/** Hava simgesi türleri */
+enum class Kind { SUN, MOON, PARTLY, CLOUD, FOG, RAIN, SNOW, STORM, HOT, COLD }
+
+/** Renk takımı: gündüz krem zemin, gece siyah zemin */
+class Theme(val night: Boolean) {
+    val bg: Int = if (night) 0xFF111111.toInt() else 0xFFF4F1EA.toInt()
+    val text: Int = if (night) 0xFFF4EDE4.toInt() else 0xFF111111.toInt()
+    val accent: Int = if (night) 0xFFE8283E.toInt() else 0xFFC8102E.toInt()
 }
 
-/** Zaman çizelgesindeki bir işaret: hava olayının başladığı/bittiği saat */
-class Marker(
-    val label: String,
-    val temp: Int,
-    val code: Int,
-    val night: Boolean,
-    val notable: Boolean
+/** Tasarım 340x200 birimlik bir tuval; u = bir birimin piksel karşılığı */
+class Metrics(val u: Float, val ox: Float, val oy: Float)
+
+/** Çizilecek bilgilerin özeti */
+class Info(
+    val kind: Kind,
+    val warn: String,
+    val sub: String,
+    val hi: Int?,
+    val lo: Int?,
+    val slots: List<Slot>
 )
 
 object Renderer {
 
-    /** Gökyüzü (kubbe) kısmının yüksekliğe oranı; altı tepeler + zaman çizelgesi */
-    const val SKY_FRACTION = 0.68f
+    const val DW = 340f
+    const val DH = 200f
+
+    // Tasarım birimleriyle saat ve tarih konumu (TextClock bunlara göre yerleştirilir)
+    const val TIME_X = 12f
+    const val TIME_BASE = 86f
+    const val TIME_SIZE = 62f
+    const val DATE_X = 14f
+    const val DATE_BASE = 22f
+    const val DATE_SIZE = 15f
+
+    private val TR = Locale("tr", "TR")
+
+    fun metrics(w: Int, h: Int): Metrics {
+        val u = min(w / DW, h / DH)
+        return Metrics(u, (w - DW * u) / 2f, (h - DH * u) / 2f)
+    }
 
     // ---- Gün / gece hesabı ----
     fun phaseOf(w: Weather?, nowMs: Long): Phase {
@@ -68,38 +87,14 @@ object Renderer {
         }
     }
 
-    // ---- Gökyüzü renkleri ----
-    private val ALTS = floatArrayOf(-1f, -0.3f, -0.1f, 0f, 0.12f, 0.35f, 1f)
-    private val TOPS = intArrayOf(
-        0xFF0A1030.toInt(), 0xFF111A44.toInt(), 0xFF1F2A66.toInt(), 0xFF34508F.toInt(),
-        0xFF3A62A8.toInt(), 0xFF2F68B8.toInt(), 0xFF2A63B5.toInt()
-    )
-    private val BOTS = intArrayOf(
-        0xFF182352.toInt(), 0xFF2A2F6E.toInt(), 0xFF5B3E86.toInt(), 0xFFF08A5D.toInt(),
-        0xFFF2B07A.toInt(), 0xFF6AA6DE.toInt(), 0xFF5E9BDB.toInt()
-    )
+    fun themeOf(s: State, nowMs: Long): Theme = Theme(!phaseOf(s.weather, nowMs).day)
 
-    private fun lerp(a: Int, b: Int, t: Float): Int {
-        val u = t.coerceIn(0f, 1f)
-        fun ch(shift: Int): Int {
-            val x = (a shr shift) and 0xFF
-            val y = (b shr shift) and 0xFF
-            return (x + (y - x) * u).toInt().coerceIn(0, 255)
-        }
-        return (0xFF shl 24) or (ch(16) shl 16) or (ch(8) shl 8) or ch(0)
+    private fun isNight(epoch: Long, ph: Phase): Boolean {
+        val k = Math.floorMod(epoch - ph.sunrise, 86400L)
+        return k >= (ph.sunset - ph.sunrise)
     }
 
-    private fun skyAt(alt: Float): Pair<Int, Int> {
-        val a = alt.coerceIn(-1f, 1f)
-        for (i in 0 until ALTS.size - 1) {
-            if (a <= ALTS[i + 1]) {
-                val t = (a - ALTS[i]) / (ALTS[i + 1] - ALTS[i])
-                return lerp(TOPS[i], TOPS[i + 1], t) to lerp(BOTS[i], BOTS[i + 1], t)
-            }
-        }
-        return TOPS.last() to BOTS.last()
-    }
-
+    // ---- Hava kodu -> simge / metin ----
     private fun conditionText(code: Int): String = when (code) {
         0 -> "Açık"
         1 -> "Az bulutlu"
@@ -116,446 +111,383 @@ object Renderer {
         else -> ""
     }
 
-    private fun cloudCount(code: Int): Int = when (code) {
-        0, 1 -> 0
-        2 -> 1
-        else -> 3
+    private fun kindOfCode(code: Int, night: Boolean): Kind = when (code) {
+        0, 1 -> if (night) Kind.MOON else Kind.SUN
+        2 -> if (night) Kind.CLOUD else Kind.PARTLY
+        3 -> Kind.CLOUD
+        45, 48 -> Kind.FOG
+        in 51..67, in 80..82 -> Kind.RAIN
+        in 71..77, 85, 86 -> Kind.SNOW
+        in 95..99 -> Kind.STORM
+        else -> if (night) Kind.MOON else Kind.SUN
     }
 
-    // ---- Zaman çizelgesi: önemli hava olayları ----
-    /** 0 açık, 1 bulutlu, 2 kapalı, 3 sis, 4 yağmur, 5 kar, 6 fırtına */
-    private fun cat(code: Int): Int = when (code) {
-        0, 1 -> 0
-        2 -> 1
-        3 -> 2
-        45, 48 -> 3
-        in 51..67, in 80..82 -> 4
-        in 71..77, 85, 86 -> 5
-        in 95..99 -> 6
-        else -> 0
+    private fun precip(k: Kind) = k == Kind.RAIN || k == Kind.SNOW || k == Kind.STORM
+
+    private fun eventName(k: Kind) = when (k) {
+        Kind.SNOW -> "KAR"
+        Kind.STORM -> "FIRTINA"
+        else -> "YAĞMUR"
     }
 
-    private fun isNight(epoch: Long, ph: Phase): Boolean {
-        val k = Math.floorMod(epoch - ph.sunrise, 86400L)
-        return k >= (ph.sunset - ph.sunrise)
-    }
+    private fun hourLabel(epoch: Long): String =
+        SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(epoch * 1000))
 
-    fun markers(w: Weather, ph: Phase, nowSec: Long): List<Marker> {
-        val hrs = w.hours.filter { it.epoch >= nowSec - 3599 && it.epoch <= nowSec + 20 * 3600 }
-        if (hrs.isEmpty()) return emptyList()
-        val fmt = SimpleDateFormat("HH:mm", Locale.getDefault())
-        fun label(s: Slot) = fmt.format(Date(s.epoch * 1000))
-
-        val out = ArrayList<Marker>()
-        out.add(Marker("Şimdi", hrs[0].temp, hrs[0].code, isNight(nowSec, ph), cat(hrs[0].code) >= 3))
-        var prev = cat(hrs[0].code)
-        for (i in 1 until hrs.size) {
-            val h = hrs[i]
-            val cur = cat(h.code)
-            val imp = cur >= 3
-            val prevImp = prev >= 3
-            if (imp && cur != prev) {
-                out.add(Marker(label(h), h.temp, h.code, isNight(h.epoch, ph), true))   // olay başlıyor
-            } else if (!imp && prevImp) {
-                out.add(Marker(label(h), h.temp, h.code, isNight(h.epoch, ph), false))  // olay bitiyor
-            }
-            prev = cur
+    /** Şimdi + sonraki 5 saat: ana simge, uyarı yazısı, yüksek/düşük */
+    fun analyze(w: Weather?, ph: Phase, nowMs: Long): Info {
+        if (w == null) {
+            return Info(Kind.CLOUD, "HAVA BEKLENİYOR", "Dokununca yenilenir", null, null, emptyList())
         }
-        // Önemli bir olay yoksa gün boyu seyri göster
-        if (out.size == 1) {
-            for (off in intArrayOf(5, 10, 15)) {
-                if (off < hrs.size) {
-                    val h = hrs[off]
-                    out.add(Marker(label(h), h.temp, h.code, isNight(h.epoch, ph), false))
+        val nowSec = nowMs / 1000
+        val night = !ph.day
+        // en az 45 dk sonrası: 07:48 iken 09:00, 10:00, 11:00, 12:00, 13:00
+        val slots = w.hours.filter { it.epoch >= nowSec + 45 * 60 }.sortedBy { it.epoch }.take(5)
+
+        val curKind = kindOfCode(w.code, night)
+        val curPrecip = precip(curKind)
+        val ev = slots.filter { precip(kindOfCode(it.code, isNight(it.epoch, ph))) }
+
+        val main = when {
+            curPrecip -> curKind
+            ev.isNotEmpty() -> {
+                val kinds = ev.map { kindOfCode(it.code, isNight(it.epoch, ph)) }
+                when {
+                    kinds.contains(Kind.SNOW) -> Kind.SNOW
+                    kinds.contains(Kind.STORM) -> Kind.STORM
+                    else -> Kind.RAIN
                 }
             }
+            w.temp >= 30 -> Kind.HOT
+            w.temp <= 5 -> Kind.COLD
+            else -> curKind
         }
-        return out.take(5)
-    }
 
-    // ---- İkonlar ----
-    private fun drawCloud(c: Canvas, x: Float, y: Float, s: Float, p: Paint) {
-        c.drawCircle(x - s * 0.62f, y, s * 0.5f, p)
-        c.drawCircle(x, y - s * 0.28f, s * 0.68f, p)
-        c.drawCircle(x + s * 0.68f, y, s * 0.5f, p)
-        c.drawRoundRect(RectF(x - s * 1.1f, y - s * 0.02f, x + s * 1.18f, y + s * 0.5f), s * 0.25f, s * 0.25f, p)
-    }
-
-    private fun drawSun(c: Canvas, x: Float, y: Float, r: Float, a: Int) {
-        val p = Paint(Paint.ANTI_ALIAS_FLAG)
-        p.color = 0xFFFFD36B.toInt()
-        p.alpha = a
-        c.drawCircle(x, y, r * 0.5f, p)
-        p.style = Paint.Style.STROKE
-        p.strokeWidth = r * 0.16f
-        p.strokeCap = Paint.Cap.ROUND
-        for (i in 0 until 8) {
-            val t = i * PI / 4
-            c.drawLine(
-                x + (r * 0.72f * cos(t)).toFloat(), y + (r * 0.72f * sin(t)).toFloat(),
-                x + (r * 0.98f * cos(t)).toFloat(), y + (r * 0.98f * sin(t)).toFloat(), p
-            )
+        val warn = when {
+            curPrecip -> "ŞU AN ${eventName(curKind)}"
+            ev.isNotEmpty() -> {
+                val k = kindOfCode(ev[0].code, isNight(ev[0].epoch, ph))
+                "${hourLabel(ev[0].epoch)}'DE ${eventName(k)}"
+            }
+            w.temp >= 30 -> "ÇOK SICAK · SU İÇ"
+            w.temp <= 5 -> "SOĞUK · MONT GİY"
+            w.code == 0 || w.code == 1 -> "AÇIK HAVA"
+            else -> conditionText(w.code).uppercase(TR)
         }
+
+        val cond = conditionText(w.code).lowercase(TR)
+        val sub = if (cond.isEmpty()) "Şimdi ${w.temp}°C" else "Şimdi ${w.temp}°C · $cond"
+
+        // günün en yüksek / en düşük sıcaklığı (bugünün saatlik verisi + şimdiki)
+        val cal = Calendar.getInstance()
+        cal.set(Calendar.HOUR_OF_DAY, 0); cal.set(Calendar.MINUTE, 0)
+        cal.set(Calendar.SECOND, 0); cal.set(Calendar.MILLISECOND, 0)
+        val start = cal.timeInMillis / 1000
+        val today = w.hours.filter { it.epoch >= start && it.epoch < start + 86400 }.map { it.temp }
+        val all = today + w.temp
+        return Info(main, warn, sub, all.max(), all.min(), slots)
     }
 
-    private fun drawMoonIcon(c: Canvas, x: Float, y: Float, r: Float, a: Int) {
-        val layer = c.saveLayer(RectF(x - r, y - r, x + r, y + r), null)
-        val p = Paint(Paint.ANTI_ALIAS_FLAG)
-        p.color = 0xFFF3F1E4.toInt()
-        p.alpha = a
-        c.drawCircle(x, y, r * 0.62f, p)
-        p.xfermode = PorterDuffXfermode(PorterDuff.Mode.CLEAR)
-        c.drawCircle(x + r * 0.34f, y - r * 0.14f, r * 0.55f, p)
-        p.xfermode = null
-        c.restoreToCount(layer)
-    }
-
-    private fun drawCloudIcon(c: Canvas, x: Float, y: Float, r: Float, a: Int, dark: Boolean) {
-        val p = Paint(Paint.ANTI_ALIAS_FLAG)
-        p.color = if (dark) 0xFFC9D2E0.toInt() else 0xFFFFFFFF.toInt()
-        p.alpha = a
-        drawCloud(c, x, y, r * 0.5f, p)
-    }
-
-    /** (x, y) ikonun merkezi, r yarıçapı */
-    private fun drawWeatherIcon(c: Canvas, code: Int, night: Boolean, x: Float, y: Float, r: Float, a: Int) {
-        val p = Paint(Paint.ANTI_ALIAS_FLAG)
-        when (code) {
-            0, 1 -> if (night) drawMoonIcon(c, x, y, r, a) else drawSun(c, x, y, r, a)
-            2 -> {
-                if (night) drawMoonIcon(c, x - r * 0.25f, y - r * 0.25f, r * 0.9f, a)
-                else drawSun(c, x - r * 0.25f, y - r * 0.25f, r * 0.85f, a)
-                drawCloudIcon(c, x + r * 0.12f, y + r * 0.22f, r, a, false)
-            }
-            3 -> drawCloudIcon(c, x, y, r, a, true)
-            45, 48 -> {
-                p.color = 0xFFDDE3EC.toInt(); p.alpha = a
-                p.style = Paint.Style.STROKE; p.strokeWidth = r * 0.16f; p.strokeCap = Paint.Cap.ROUND
-                for (i in -1..1) c.drawLine(x - r * 0.8f, y + i * r * 0.42f, x + r * 0.8f, y + i * r * 0.42f, p)
-            }
-            in 71..77, 85, 86 -> {
-                drawCloudIcon(c, x, y - r * 0.18f, r, a, true)
-                p.color = 0xFFFFFFFF.toInt(); p.alpha = a
-                for (i in -1..1) c.drawCircle(x + i * r * 0.5f, y + r * 0.72f, r * 0.10f, p)
-            }
-            in 95..99 -> {
-                drawCloudIcon(c, x, y - r * 0.22f, r, a, true)
-                p.color = 0xFFFFD36B.toInt(); p.alpha = a
-                p.style = Paint.Style.STROKE; p.strokeWidth = r * 0.16f; p.strokeCap = Paint.Cap.ROUND
-                c.drawLine(x + r * 0.1f, y + r * 0.2f, x - r * 0.1f, y + r * 0.55f, p)
-                c.drawLine(x - r * 0.1f, y + r * 0.55f, x + r * 0.15f, y + r * 0.6f, p)
-                c.drawLine(x + r * 0.15f, y + r * 0.6f, x - r * 0.05f, y + r * 0.95f, p)
-            }
-            else -> { // yağmur, çise, sağanak
-                drawCloudIcon(c, x, y - r * 0.18f, r, a, true)
-                p.color = 0xFF8FD3FF.toInt(); p.alpha = a
-                p.style = Paint.Style.STROKE; p.strokeWidth = r * 0.16f; p.strokeCap = Paint.Cap.ROUND
-                for (i in -1..1) {
-                    c.drawLine(
-                        x + i * r * 0.5f + r * 0.1f, y + r * 0.48f,
-                        x + i * r * 0.5f - r * 0.1f, y + r * 0.88f, p
-                    )
-                }
-            }
+    // ---- Çizim yardımcıları ----
+    private fun tp(size: Float, color: Int, bold: Boolean, align: Paint.Align, ls: Float = 0f): Paint =
+        Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            textSize = size
+            this.color = color
+            textAlign = align
+            letterSpacing = ls
+            typeface = if (bold) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
         }
-    }
 
     /** Yazıyı verilen genişliğe sığana kadar küçült */
     private fun fitText(p: Paint, text: String, maxW: Float, startSize: Float, minSize: Float) {
         var s = startSize
         p.textSize = s
         while (p.measureText(text) > maxW && s > minSize) {
-            s -= 0.5f
+            s -= 0.25f
             p.textSize = s
         }
+    }
+
+    private fun drawPin(c: Canvas, x: Float, y: Float, th: Theme) {
+        c.save()
+        c.translate(x, y)
+        val p = Paint(Paint.ANTI_ALIAS_FLAG)
+        p.color = th.accent
+        val path = Path()
+        path.addCircle(0f, -2f, 4f, Path.Direction.CW)
+        path.moveTo(-3.7f, 0.6f)
+        path.lineTo(0f, 6f)
+        path.lineTo(3.7f, 0.6f)
+        path.close()
+        c.drawPath(path, p)
+        p.color = th.bg
+        c.drawCircle(0f, -2f, 1.4f, p)
+        c.restore()
+    }
+
+    // ---- Simgeler (9 birimlik yarıçaplı, merkez 0,0) ----
+    private fun drawSun(c: Canvas, th: Theme) {
+        val p = Paint(Paint.ANTI_ALIAS_FLAG)
+        p.color = th.accent
+        c.drawCircle(0f, 0f, 5f, p)
+        p.style = Paint.Style.STROKE
+        p.strokeWidth = 1.8f
+        p.pathEffect = DashPathEffect(floatArrayOf(2f, 3.2f), 0f)
+        c.drawCircle(0f, 0f, 8.5f, p)
+    }
+
+    private fun drawCloud(c: Canvas, th: Theme) {
+        val p = Paint(Paint.ANTI_ALIAS_FLAG)
+        p.color = th.text
+        c.drawOval(RectF(-8f, -3f, 8f, 7f), p)
+        c.drawCircle(-3.5f, -1.5f, 4.6f, p)
+        c.drawCircle(3f, -3f, 5.4f, p)
+    }
+
+    private fun drawMoon(c: Canvas, th: Theme) {
+        val p = Paint(Paint.ANTI_ALIAS_FLAG)
+        p.color = th.text
+        c.drawCircle(0f, 0f, 6f, p)
+        p.color = th.bg
+        c.drawCircle(3f, -2f, 5.4f, p)
+    }
+
+    private fun drawUmbrella(c: Canvas, th: Theme) {
+        val p = Paint(Paint.ANTI_ALIAS_FLAG)
+        val canopy = Path()
+        canopy.moveTo(-9f, 0f)
+        canopy.arcTo(RectF(-9f, -9f, 9f, 9f), 180f, 180f, false)
+        for (i in 0 until 4) canopy.rQuadTo(-2.25f, 2.4f, -4.5f, 0f)
+        canopy.close()
+        p.color = th.accent
+        c.drawPath(canopy, p)
+
+        p.style = Paint.Style.STROKE
+        p.color = th.bg
+        p.alpha = 140
+        p.strokeWidth = 0.6f
+        c.drawLine(0f, -9f, 0f, 0f, p)
+        val rib = Path()
+        rib.moveTo(-4.5f, -7.2f); rib.quadTo(-5.5f, -3f, -4.5f, 0f)
+        rib.moveTo(4.5f, -7.2f); rib.quadTo(5.5f, -3f, 4.5f, 0f)
+        c.drawPath(rib, p)
+
+        p.color = th.text
+        p.alpha = 255
+        p.strokeWidth = 1.5f
+        p.strokeCap = Paint.Cap.ROUND
+        val handle = Path()
+        handle.moveTo(0f, -9f); handle.lineTo(0f, -11f)
+        handle.moveTo(0f, 0f); handle.lineTo(0f, 8f); handle.quadTo(0f, 11f, -3f, 11f)
+        c.drawPath(handle, p)
+    }
+
+    private fun drawSnow(c: Canvas, th: Theme) {
+        val p = Paint(Paint.ANTI_ALIAS_FLAG)
+        p.style = Paint.Style.STROKE
+        p.color = th.text
+        p.strokeWidth = 1.4f
+        p.strokeCap = Paint.Cap.ROUND
+        p.strokeJoin = Paint.Join.ROUND
+        c.drawLine(0f, -9f, 0f, 9f, p)
+        c.drawLine(-7.8f, -4.5f, 7.8f, 4.5f, p)
+        c.drawLine(-7.8f, 4.5f, 7.8f, -4.5f, p)
+        val ticks = Path()
+        ticks.moveTo(-2f, -7f); ticks.lineTo(0f, -5f); ticks.lineTo(2f, -7f)
+        ticks.moveTo(-2f, 7f); ticks.lineTo(0f, 5f); ticks.lineTo(2f, 7f)
+        c.drawPath(ticks, p)
+        p.style = Paint.Style.FILL
+        p.color = th.accent
+        c.drawCircle(0f, 0f, 1.7f, p)
+    }
+
+    private fun drawHot(c: Canvas, th: Theme) {
+        val p = Paint(Paint.ANTI_ALIAS_FLAG)
+        p.color = th.accent
+        c.drawCircle(0f, 0f, 4.5f, p)
+        p.style = Paint.Style.STROKE
+        p.strokeWidth = 1.6f
+        p.strokeCap = Paint.Cap.ROUND
+        for (i in 0 until 8) {
+            val t = i * PI / 4
+            c.drawLine(
+                (8 * cos(t)).toFloat(), (8 * sin(t)).toFloat(),
+                (11 * cos(t)).toFloat(), (11 * sin(t)).toFloat(), p
+            )
+        }
+        p.color = th.text
+        p.strokeWidth = 1.2f
+        val wave = Path()
+        wave.moveTo(-8f, 15f)
+        wave.rQuadTo(2f, -2f, 4f, 0f)
+        wave.rQuadTo(2f, 2f, 4f, 0f)
+        wave.rQuadTo(2f, -2f, 4f, 0f)
+        wave.rQuadTo(2f, 2f, 4f, 0f)
+        c.drawPath(wave, p)
+    }
+
+    private fun drawCold(c: Canvas, th: Theme) {
+        val p = Paint(Paint.ANTI_ALIAS_FLAG)
+        p.style = Paint.Style.FILL
+        p.color = th.bg
+        c.drawRoundRect(RectF(-1.8f, -10f, 1.8f, 2f), 1.8f, 1.8f, p)
+        p.style = Paint.Style.STROKE
+        p.color = th.text
+        p.strokeWidth = 1f
+        c.drawRoundRect(RectF(-1.8f, -10f, 1.8f, 2f), 1.8f, 1.8f, p)
+        p.style = Paint.Style.FILL
+        c.drawCircle(0f, 4f, 3.6f, p)
+        p.style = Paint.Style.STROKE
+        p.strokeWidth = 1.8f
+        c.drawLine(0f, 0f, 0f, 3f, p)
+        p.color = th.accent
+        p.strokeWidth = 1.1f
+        p.strokeCap = Paint.Cap.ROUND
+        c.drawLine(7f, -9f, 7f, -3f, p)
+        c.drawLine(4.4f, -7.5f, 9.6f, -4.5f, p)
+        c.drawLine(4.4f, -4.5f, 9.6f, -7.5f, p)
+    }
+
+    private fun drawFog(c: Canvas, th: Theme) {
+        val p = Paint(Paint.ANTI_ALIAS_FLAG)
+        p.style = Paint.Style.STROKE
+        p.color = th.text
+        p.strokeWidth = 1.6f
+        p.strokeCap = Paint.Cap.ROUND
+        for (i in -1..1) c.drawLine(-8f, i * 4.5f, 8f, i * 4.5f, p)
+    }
+
+    private fun drawStorm(c: Canvas, th: Theme) {
+        c.save()
+        c.translate(0f, -3f)
+        drawCloud(c, th)
+        c.restore()
+        val p = Paint(Paint.ANTI_ALIAS_FLAG)
+        p.style = Paint.Style.STROKE
+        p.color = th.accent
+        p.strokeWidth = 1.6f
+        p.strokeCap = Paint.Cap.ROUND
+        p.strokeJoin = Paint.Join.ROUND
+        val bolt = Path()
+        bolt.moveTo(1f, 4f); bolt.lineTo(-1.5f, 9f); bolt.lineTo(1.5f, 9.5f); bolt.lineTo(-0.5f, 14f)
+        c.drawPath(bolt, p)
+    }
+
+    private fun drawKind(c: Canvas, k: Kind, x: Float, y: Float, sc: Float, th: Theme) {
+        c.save()
+        c.translate(x, y)
+        c.scale(sc, sc)
+        when (k) {
+            Kind.SUN -> drawSun(c, th)
+            Kind.MOON -> drawMoon(c, th)
+            Kind.CLOUD -> drawCloud(c, th)
+            Kind.PARTLY -> {
+                c.save(); c.translate(-3f, -3f); c.scale(0.75f, 0.75f); drawSun(c, th); c.restore()
+                c.save(); c.translate(3f, 3f); c.scale(0.9f, 0.9f); drawCloud(c, th); c.restore()
+            }
+            Kind.FOG -> drawFog(c, th)
+            Kind.RAIN -> drawUmbrella(c, th)
+            Kind.SNOW -> drawSnow(c, th)
+            Kind.STORM -> drawStorm(c, th)
+            Kind.HOT -> drawHot(c, th)
+            Kind.COLD -> drawCold(c, th)
+        }
+        c.restore()
     }
 
     // ---- Ana çizim ----
     fun render(w: Int, h: Int, dens: Float, s: State): Bitmap {
         val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
         val c = Canvas(bmp)
-        val wf = w.toFloat()
-        val hf = h.toFloat()
         val nowMs = System.currentTimeMillis()
-
         val ph = phaseOf(s.weather, nowMs)
-        val alt = ph.alt
-        val hy = hf * SKY_FRACTION     // ufuk çizgisi
-        val cx = wf / 2f
-        val rx = wf * 0.42f
-        val ry = hf * 0.60f
+        val th = Theme(!ph.day)
+        val info = analyze(s.weather, ph, nowMs)
+        val m = metrics(w, h)
+        val u = m.u
 
-        val corner = min(hf * 0.16f, 28f * dens)
-        c.clipPath(Path().apply {
-            addRoundRect(RectF(0f, 0f, wf, hf), corner, corner, Path.Direction.CW)
-        })
-
-        val p = Paint(Paint.ANTI_ALIAS_FLAG)
-
-        // 1) gökyüzü
-        val (top, bot) = skyAt(alt)
-        p.shader = LinearGradient(0f, 0f, 0f, hf, top, bot, Shader.TileMode.CLAMP)
-        c.drawRect(0f, 0f, wf, hf, p)
-        p.shader = null
-
-        // güneş / ay konumu
-        val ang = Math.toRadians((180.0 + 180.0 * ph.p))
-        val bx = cx + rx * cos(ang).toFloat()
-        val by = hy + ry * sin(ang).toFloat()
-
-        // 2) alacakaranlık ışıltısı
-        val tw = (1f - abs(alt) / 0.28f).coerceIn(0f, 1f)
-        if (tw > 0f) {
-            val glowColor = if (ph.day) 0xFFFFA45B.toInt() else 0xFFE0707A.toInt()
-            p.shader = RadialGradient(
-                bx, hy, wf * 0.55f,
-                intArrayOf((glowColor and 0x00FFFFFF) or ((tw * 150).toInt() shl 24), glowColor and 0x00FFFFFF),
-                null, Shader.TileMode.CLAMP
+        // zemin
+        val corner = min(18f * u, 28f * dens)
+        val bgp = Paint(Paint.ANTI_ALIAS_FLAG)
+        bgp.color = th.bg
+        c.drawRoundRect(RectF(0f, 0f, w.toFloat(), h.toFloat()), corner, corner, bgp)
+        if (th.night) {
+            val fr = Paint(Paint.ANTI_ALIAS_FLAG)
+            fr.style = Paint.Style.STROKE
+            fr.color = th.accent
+            fr.alpha = 170
+            fr.strokeWidth = 0.8f * u
+            c.drawRoundRect(
+                RectF(0.5f * u, 0.5f * u, w - 0.5f * u, h - 0.5f * u),
+                corner, corner, fr
             )
-            c.drawRect(0f, 0f, wf, hf, p)
-            p.shader = null
         }
 
-        // 3) yıldızlar
-        val nf = ((-alt - 0.05f) / 0.3f).coerceIn(0f, 1f)
-        if (nf > 0f) {
-            val rng = Random(11)
-            p.color = 0xFFFFFFFF.toInt()
-            repeat(48) {
-                val x = rng.nextFloat() * wf
-                val y = rng.nextFloat() * hy * 0.92f
-                val r = (0.5f + rng.nextFloat() * 1.0f) * dens
-                val a = nf * (0.35f + 0.65f * rng.nextFloat())
-                p.alpha = (a * 255).toInt()
-                c.drawCircle(x, y, r, p)
-            }
-            p.alpha = 255
+        // bundan sonrası 340x200 tasarım birimleriyle
+        c.save()
+        c.translate(m.ox, m.oy)
+        c.scale(u, u)
+
+        // konum: işaret yazının SOLUNDA, yazının gerçek genişliğine göre
+        val place = s.place?.trim()?.uppercase(TR)
+        if (!place.isNullOrEmpty()) {
+            val pp = tp(10f, th.text, true, Paint.Align.RIGHT, 0.1f)
+            fitText(pp, place, 118f, 10f, 6f)
+            val tw = pp.measureText(place)
+            c.drawText(place, 326f, 17f, pp)
+            drawPin(c, 326f - tw - 9f, 13f, th)
         }
 
-        // 4) bulutlar
-        val weather = s.weather
-        if (weather != null) {
-            val n = cloudCount(weather.code)
-            if (n > 0) {
-                val dayF = ((alt + 0.2f) / 0.6f).coerceIn(0f, 1f)
-                p.color = 0xFFFFFFFF.toInt()
-                p.alpha = ((0.10f + 0.14f * dayF) * 255).toInt()
-                for (i in 0 until n) {
-                    val x = wf * (0.22f + 0.30f * i)
-                    val y = hy * (0.34f + 0.10f * (i % 2))
-                    drawCloud(c, x, y, hf * (0.06f + 0.010f * i), p)
-                }
-                p.alpha = 255
-            }
+        // ana simge ve dev derece
+        val big = s.weather?.temp?.let { "$it°" } ?: "--°"
+        val k = info.kind
+        when (k) {
+            Kind.HOT -> drawKind(c, k, 222f, 44f, 2.8f, th)
+            else -> drawKind(c, k, 222f, 50f, 3.3f, th)
+        }
+        val tpBig = tp(42f, th.text, false, Paint.Align.LEFT)
+        fitText(tpBig, big, 326f - 258f, 42f, 24f)
+        c.drawText(big, 258f, 68f, tpBig)
+
+        // uyarı ve alt satır (solda), yüksek / düşük (sağda)
+        val warn = tp(12f, th.accent, true, Paint.Align.LEFT)
+        fitText(warn, info.warn, 168f, 12f, 7f)
+        c.drawText(info.warn, 14f, 108f, warn)
+        val sub = tp(11f, th.text, false, Paint.Align.LEFT)
+        fitText(sub, info.sub, 168f, 11f, 7f)
+        c.drawText(info.sub, 14f, 126f, sub)
+        if (info.hi != null && info.lo != null) {
+            val hiT = "↑ ${info.hi}° YÜKSEK"
+            val loT = "↓ ${info.lo}° DÜŞÜK"
+            val hp = tp(12f, th.text, true, Paint.Align.LEFT)
+            fitText(hp, hiT, 136f, 12f, 7f)
+            c.drawText(hiT, 190f, 108f, hp)
+            val lp = tp(12f, th.text, true, Paint.Align.LEFT)
+            fitText(lp, loT, 136f, 12f, 7f)
+            c.drawText(loT, 190f, 126f, lp)
         }
 
-        // 5) yay
-        val oval = RectF(cx - rx, hy - ry, cx + rx, hy + ry)
-        p.style = Paint.Style.STROKE
-        p.strokeCap = Paint.Cap.ROUND
-        p.strokeWidth = 1.6f * dens
-        p.color = 0xFFFFFFFF.toInt()
-        p.alpha = 90
-        p.pathEffect = DashPathEffect(floatArrayOf(2f * dens, 6f * dens), 0f)
-        c.drawArc(oval, 180f, 180f, false, p)
-        p.pathEffect = null
-        p.strokeWidth = 2.4f * dens
-        p.color = 0xFFF1D58A.toInt()
-        p.alpha = if (ph.day) 235 else 150
-        if (ph.p > 0.003f) c.drawArc(oval, 180f, 180f * ph.p, false, p)
-        p.alpha = 255
-        p.style = Paint.Style.FILL
+        // ayırıcı çizgi
+        val line = Paint(Paint.ANTI_ALIAS_FLAG)
+        line.color = th.text
+        line.alpha = 200
+        line.strokeWidth = 0.8f
+        c.drawLine(14f, 138f, 326f, 138f, line)
 
-        // 6) güneş veya ay
-        if (ph.day) {
-            val r = hf * 0.048f
-            val warm = ((0.5f - alt) / 0.5f).coerceIn(0f, 1f)
-            val glowC = lerp(0xFFFFE9A8.toInt(), 0xFFFF9A4D.toInt(), warm)
-            p.shader = RadialGradient(
-                bx, by, r * 4.6f,
-                intArrayOf((glowC and 0x00FFFFFF) or (0x88 shl 24), glowC and 0x00FFFFFF),
-                null, Shader.TileMode.CLAMP
-            )
-            c.drawCircle(bx, by, r * 4.6f, p)
-            p.shader = RadialGradient(
-                bx - r * 0.3f, by - r * 0.3f, r * 1.5f,
-                lerp(0xFFFFFFE8.toInt(), 0xFFFFE9B0.toInt(), warm),
-                lerp(0xFFFFD36B.toInt(), 0xFFFF9A4D.toInt(), warm),
-                Shader.TileMode.CLAMP
-            )
-            c.drawCircle(bx, by, r, p)
-            p.shader = null
-        } else {
-            val r = hf * 0.044f
-            p.shader = RadialGradient(
-                bx, by, r * 4f,
-                intArrayOf(0x44CFE0FF, 0x00CFE0FF),
-                null, Shader.TileMode.CLAMP
-            )
-            c.drawCircle(bx, by, r * 4f, p)
-            p.shader = null
-            val layer = c.saveLayer(RectF(bx - r * 2, by - r * 2, bx + r * 2, by + r * 2), null)
-            p.color = 0xFFF3F1E4.toInt()
-            c.drawCircle(bx, by, r, p)
-            p.xfermode = PorterDuffXfermode(PorterDuff.Mode.CLEAR)
-            c.drawCircle(bx + r * 0.58f, by - r * 0.22f, r * 0.9f, p)
-            p.xfermode = null
-            c.restoreToCount(layer)
+        // sonraki 5 saat
+        val cxs = floatArrayOf(45f, 107f, 170f, 232f, 295f)
+        for ((i, sl) in info.slots.withIndex()) {
+            if (i >= cxs.size) break
+            val cx = cxs[i]
+            val sk = kindOfCode(sl.code, isNight(sl.epoch, ph))
+            val hot = precip(sk)
+            val hp = tp(9f, th.accent, true, Paint.Align.CENTER)
+            c.drawText(hourLabel(sl.epoch), cx, 161f, hp)
+            drawKind(c, sk, cx - 14f, 177f, 1.1f, th)
+            val tpT = tp(13f, if (hot) th.accent else th.text, true, Paint.Align.LEFT)
+            c.drawText("${sl.temp}°", cx - 1f, 182f, tpT)
         }
 
-        // 7) ufuk: katmanlı tepeler (güneş/ay arkalarına batar), ön katman altın çizgili
-        val night = 0xFF080C1A.toInt()
-        fun ridge(y0: Float, a1: Float, a2: Float, a3: Float, a4: Float): Path = Path().apply {
-            moveTo(0f, y0 + hf * a1)
-            cubicTo(wf * 0.22f, y0 + hf * a2, wf * 0.42f, y0 + hf * a3, wf * 0.62f, y0 + hf * a4)
-            cubicTo(wf * 0.78f, y0 + hf * (a4 - 0.03f), wf * 0.90f, y0 + hf * (a1 - 0.02f), wf, y0 + hf * (a2 - 0.01f))
-            lineTo(wf, hf); lineTo(0f, hf); close()
-        }
-        // arka tepe
-        p.color = lerp(bot, night, 0.28f)
-        c.drawPath(ridge(hy, -0.045f, -0.085f, -0.020f, -0.060f), p)
-        // orta tepe
-        p.color = lerp(bot, night, 0.52f)
-        c.drawPath(ridge(hy, 0.000f, -0.050f, 0.012f, -0.022f), p)
-        // ön tepe: koyu zemin (zaman çizelgesi burada)
-        val front = ridge(hy, 0.020f, -0.012f, 0.030f, 0.004f)
-        p.shader = LinearGradient(
-            0f, hy - hf * 0.02f, 0f, hf,
-            lerp(bot, night, 0.74f), 0xF2060912.toInt(), Shader.TileMode.CLAMP
-        )
-        c.drawPath(front, p)
-        p.shader = null
-        // altın ince kenar çizgisi
-        val rim = Path().apply {
-            moveTo(0f, hy + hf * 0.020f)
-            cubicTo(wf * 0.22f, hy - hf * 0.012f, wf * 0.42f, hy + hf * 0.030f, wf * 0.62f, hy + hf * 0.004f)
-            cubicTo(wf * 0.78f, hy - hf * 0.026f, wf * 0.90f, hy + hf * 0.000f, wf, hy - hf * 0.022f)
-        }
-        p.style = Paint.Style.STROKE
-        p.strokeWidth = 1.1f * dens
-        p.shader = LinearGradient(
-            0f, 0f, wf, 0f,
-            intArrayOf(0x00E9C874, 0xCCE9C874.toInt(), 0xFFF6E1A6.toInt(), 0xCCE9C874.toInt(), 0x00E9C874),
-            null, Shader.TileMode.CLAMP
-        )
-        c.drawPath(rim, p)
-        p.shader = null
-        p.style = Paint.Style.FILL
-
-        // 8) gün doğumu / batımı saatleri (iki uçta)
-        val fmt = SimpleDateFormat("HH:mm", Locale.getDefault())
-        val small = (hf * 0.062f).coerceIn(8f * dens, 11.5f * dens)
-        val lp = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = 0xFFF1D58A.toInt()
-            alpha = 225
-            textSize = small
-            textAlign = Paint.Align.CENTER
-            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-        }
-        val rowA = hy + hf * 0.085f
-        c.drawText(fmt.format(Date(ph.sunrise * 1000)), cx - rx, rowA, lp)
-        c.drawText(fmt.format(Date(ph.sunset * 1000)), cx + rx, rowA, lp)
-        val place = s.place
-        if (!place.isNullOrBlank()) {
-            lp.alpha = 255
-            lp.letterSpacing = 0.12f
-            val nm = place.uppercase(Locale("tr", "TR"))
-            fitText(lp, nm, rx * 1.2f, small, 7f * dens)
-            c.drawText(nm, cx, rowA, lp)
-        }
-
-        val pad = min(wf * 0.045f, 16f * dens)
-
-        if (weather != null) {
-            // 9) şu anki hava: sol üst, büyük
-            val tp = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = 0xFFFFFFFF.toInt()
-                textSize = (hf * 0.19f).coerceIn(18f * dens, 42f * dens)
-                typeface = Typeface.create("sans-serif", Typeface.NORMAL)
-                setShadowLayer(4f * dens, 0f, 1f * dens, 0x66000000)
-            }
-            val tBase = pad + tp.textSize * 0.80f
-            c.drawText("${weather.temp}°", pad, tBase, tp)
-
-            val maxW = wf * 0.215f - pad
-            val cp = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = 0xFFFFFFFF.toInt()
-                alpha = 235
-                typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-                setShadowLayer(3f * dens, 0f, 1f * dens, 0x66000000)
-            }
-            val cond = conditionText(weather.code)
-            if (cond.isNotEmpty()) {
-                fitText(cp, cond, maxW, (hf * 0.082f).coerceIn(10f * dens, 14f * dens), 8f * dens)
-                c.drawText(cond, pad, tBase + cp.textSize * 1.25f, cp)
-            }
-
-            // sağ üst: bugünün en yüksek / en düşük derecesi
-            val win = weather.hours.filter {
-                it.epoch >= nowMs / 1000 - 3599 && it.epoch <= nowMs / 1000 + 18 * 3600
-            }
-            if (win.isNotEmpty()) {
-                val hi = win.maxOf { it.temp }
-                val lo = win.minOf { it.temp }
-                val hp = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                    color = 0xFFFFFFFF.toInt()
-                    alpha = 235
-                    textAlign = Paint.Align.RIGHT
-                    typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-                    setShadowLayer(3f * dens, 0f, 1f * dens, 0x66000000)
-                }
-                fitText(hp, "↑$hi°", maxW, (hf * 0.095f).coerceIn(10f * dens, 15f * dens), 8f * dens)
-                val y1 = pad + hp.textSize * 0.85f
-                c.drawText("↑$hi°", wf - pad, y1, hp)
-                c.drawText("↓$lo°", wf - pad, y1 + hp.textSize * 1.3f, hp)
-            }
-
-            // 10) zaman çizelgesi: önemli hava olayları küçük saatiyle
-            val mk = markers(weather, ph, nowMs / 1000)
-            if (mk.isNotEmpty()) {
-                val ir = (hf * 0.055f).coerceIn(6f * dens, 10f * dens)
-                val tiny = (hf * 0.052f).coerceIn(7f * dens, 10f * dens)
-                val tempSize = (hf * 0.07f).coerceIn(8f * dens, 12.5f * dens)
-                val cy = hy + hf * 0.185f
-                val labelY = hy + hf * 0.285f
-                val cellW = wf * 0.80f / 5f
-                val startX = cx - mk.size * cellW / 2f
-
-                val tmp = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                    color = 0xFFFFFFFF.toInt()
-                    textSize = tempSize
-                    typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-                }
-                val hp2 = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                    color = 0xFFFFFFFF.toInt()
-                    textSize = tiny
-                    textAlign = Paint.Align.CENTER
-                    typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-                }
-                val pill = Paint(Paint.ANTI_ALIAS_FLAG)
-
-                for ((i, m) in mk.withIndex()) {
-                    val xc = startX + cellW * (i + 0.5f)
-                    if (m.notable) {
-                        pill.color = 0x2EFFFFFF
-                        c.drawRoundRect(
-                            RectF(xc - cellW * 0.47f, cy - ir * 1.45f, xc + cellW * 0.47f, labelY + tiny * 0.55f),
-                            ir * 0.9f, ir * 0.9f, pill
-                        )
-                    }
-                    val label = "${m.temp}°"
-                    val tw2 = tmp.measureText(label)
-                    val total = ir * 2f + ir * 0.45f + tw2
-                    val x0 = xc - total / 2f
-                    drawWeatherIcon(c, m.code, m.night, x0 + ir, cy, ir, 255)
-                    tmp.alpha = 255
-                    c.drawText(label, x0 + ir * 2.45f, cy + tempSize * 0.35f, tmp)
-                    hp2.alpha = if (m.notable) 255 else 200
-                    c.drawText(m.label, xc, labelY, hp2)
-                }
-            }
-        }
-
+        c.restore()
         return bmp
     }
 

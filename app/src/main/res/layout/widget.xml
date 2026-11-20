@@ -3,6 +3,7 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent">
 
+    <!-- Tüm sahne (zemin, derece, simgeler, tahmin) bu resimde; dokununca yeniler -->
     <ImageView
         android:id="@+id/bg"
         android:layout_width="match_parent"
@@ -10,56 +11,46 @@
         android:scaleType="fitXY"
         android:src="@drawable/bg_initial" />
 
-    <LinearLayout
+    <!-- Tarih: dokununca takvim açılır. Konumu çalışma anında ayarlanır. -->
+    <FrameLayout
+        android:id="@+id/date_box"
         android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:orientation="vertical"
-        android:weightSum="100">
+        android:layout_height="match_parent">
 
-        <LinearLayout
-            android:id="@+id/top_area"
-            android:layout_width="match_parent"
-            android:layout_height="0dp"
-            android:layout_weight="68"
-            android:gravity="center_horizontal|bottom"
-            android:orientation="vertical"
-            android:paddingBottom="7dp">
+        <TextClock
+            android:id="@+id/date"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="top|start"
+            android:fontFamily="sans-serif-medium"
+            android:format12Hour="EEEE, d MMMM"
+            android:format24Hour="EEEE, d MMMM"
+            android:includeFontPadding="false"
+            android:letterSpacing="0.07"
+            android:maxLines="1"
+            android:textAllCaps="true"
+            android:textColor="#FFC8102E"
+            android:textSize="15dp"
+            android:textStyle="bold" />
+    </FrameLayout>
 
-            <TextClock
-                android:id="@+id/date"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:fontFamily="sans-serif-medium"
-                android:format12Hour="EEEE, d MMMM"
-                android:format24Hour="EEEE, d MMMM"
-                android:includeFontPadding="false"
-                android:shadowColor="#80000000"
-                android:shadowDx="0"
-                android:shadowDy="1"
-                android:shadowRadius="4"
-                android:textColor="#FFF1D58A"
-                android:textSize="13dp" />
+    <!-- Saat: dokununca saat / alarm ekranı açılır -->
+    <FrameLayout
+        android:id="@+id/time_box"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent">
 
-            <TextClock
-                android:id="@+id/time"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:fontFamily="sans-serif"
-                android:format12Hour="HH:mm"
-                android:format24Hour="HH:mm"
-                android:includeFontPadding="false"
-                android:shadowColor="#80000000"
-                android:shadowDx="0"
-                android:shadowDy="2"
-                android:shadowRadius="8"
-                android:textColor="#FFFFF4D6"
-                android:textSize="42dp" />
-        </LinearLayout>
-
-        <FrameLayout
-            android:id="@+id/ground_hit"
-            android:layout_width="match_parent"
-            android:layout_height="0dp"
-            android:layout_weight="32" />
-    </LinearLayout>
+        <TextClock
+            android:id="@+id/time"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="top|start"
+            android:fontFamily="sans-serif"
+            android:format12Hour="HH:mm"
+            android:format24Hour="HH:mm"
+            android:includeFontPadding="false"
+            android:maxLines="1"
+            android:textColor="#FF111111"
+            android:textSize="62dp" />
+    </FrameLayout>
 </FrameLayout>
