@@ -19,7 +19,12 @@ data class Weather(
     val hours: List<Slot>
 )
 
-data class State(val weather: Weather?, val place: String?)
+data class State(
+    val weather: Weather?,
+    val place: String?,
+    val themeMode: Int = 0,   // 0 koyu, 1 açık, 2 otomatik (gündüz açık / gece koyu)
+    val fetchedAt: Long = 0L  // hava verisinin son alındığı an (ms)
+)
 
 object Data {
     private const val PREFS = "gunluk"
@@ -53,6 +58,12 @@ object Data {
 
     fun place(ctx: Context): String? = prefs(ctx).getString("place", null)
 
+    fun theme(ctx: Context): Int = prefs(ctx).getInt("theme", 0)
+
+    fun setTheme(ctx: Context, mode: Int) {
+        prefs(ctx).edit().putInt("theme", mode).apply()
+    }
+
     fun lastLocTry(ctx: Context): Long = prefs(ctx).getLong("locTry", 0L)
 
     fun markLocTry(ctx: Context, t: Long) {
@@ -63,7 +74,7 @@ object Data {
     fun load(ctx: Context): State {
         val p = prefs(ctx)
         val w = p.getString("wJson", null)?.let { parseWeather(it) }
-        return State(w, p.getString("place", null))
+        return State(w, p.getString("place", null), p.getInt("theme", 0), p.getLong("wAt", 0L))
     }
 
     // ---- İnternetten çekme ----
@@ -71,7 +82,7 @@ object Data {
     fun refresh(ctx: Context, force: Boolean): Boolean {
         val now = System.currentTimeMillis()
         val p = prefs(ctx)
-        val need = force || p.getInt("wVer", 0) < VERSION || now - p.getLong("wAt", 0L) > 30 * 60_000L
+        val need = force || p.getInt("wVer", 0) < VERSION || now - p.getLong("wAt", 0L) > 15 * 60_000L
         if (!need) return false
 
         val (lat, lon) = coords(ctx)

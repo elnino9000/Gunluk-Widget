@@ -65,6 +65,37 @@ class MainActivity : Activity() {
             text = "Her zaman izni ver (otomatik güncelleme)"
             setOnClickListener { askBackground() }
         }
+        val themeBtn = Button(this).apply {
+            fun label() = "Tema: " + when (Data.theme(this@MainActivity)) {
+                1 -> "Açık"
+                2 -> "Otomatik (gündüz açık, gece koyu)"
+                else -> "Koyu"
+            }
+            text = label()
+            setOnClickListener {
+                Data.setTheme(this@MainActivity, (Data.theme(this@MainActivity) + 1) % 3)
+                text = label()
+                sendBroadcast(
+                    Intent(this@MainActivity, WidgetProvider::class.java)
+                        .setAction(WidgetProvider.ACTION_REFRESH)
+                )
+            }
+        }
+        val batteryBtn = Button(this).apply {
+            text = "Pil kısıtlamasını kaldır (güncel kalsın)"
+            setOnClickListener {
+                try {
+                    startActivity(
+                        Intent(
+                            Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                            Uri.fromParts("package", packageName, null)
+                        )
+                    )
+                } catch (e: Exception) {
+                    startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                }
+            }
+        }
         val refreshBtn = Button(this).apply {
             text = "Widget'ı yenile"
             setOnClickListener {
@@ -81,6 +112,8 @@ class MainActivity : Activity() {
         root.addView(status)
         root.addView(locBtn)
         root.addView(bgBtn)
+        root.addView(themeBtn)
+        root.addView(batteryBtn)
         root.addView(refreshBtn)
         setContentView(root)
 

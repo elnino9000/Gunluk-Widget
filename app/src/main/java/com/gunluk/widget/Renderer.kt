@@ -87,7 +87,11 @@ object Renderer {
         }
     }
 
-    fun themeOf(s: State, nowMs: Long): Theme = Theme(!phaseOf(s.weather, nowMs).day)
+    fun themeOf(s: State, nowMs: Long): Theme = when (s.themeMode) {
+        1 -> Theme(false)
+        2 -> Theme(!phaseOf(s.weather, nowMs).day)
+        else -> Theme(true)
+    }
 
     private fun isNight(epoch: Long, ph: Phase): Boolean {
         val k = Math.floorMod(epoch - ph.sunrise, 86400L)
@@ -400,7 +404,7 @@ object Renderer {
         val c = Canvas(bmp)
         val nowMs = System.currentTimeMillis()
         val ph = phaseOf(s.weather, nowMs)
-        val th = Theme(!ph.day)
+        val th = themeOf(s, nowMs)
         val info = analyze(s.weather, ph, nowMs)
         val m = metrics(w, h)
         val u = m.u
@@ -435,6 +439,13 @@ object Renderer {
             val tw = pp.measureText(place)
             c.drawText(place, 326f, 17f, pp)
             drawPin(c, 326f - tw - 9f, 13f, th)
+        }
+
+        // verinin ne zaman alındığı (eski veri hemen anlaşılsın)
+        if (s.fetchedAt > 0L) {
+            val up = tp(8f, th.text, false, Paint.Align.RIGHT)
+            up.alpha = 150
+            c.drawText("güncelleme ${hourLabel(s.fetchedAt / 1000)}", 326f, 29f, up)
         }
 
         // ana simge ve dev derece
