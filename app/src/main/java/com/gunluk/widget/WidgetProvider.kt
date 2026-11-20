@@ -88,9 +88,9 @@ class WidgetProvider : AppWidgetProvider() {
                 rv.setImageViewBitmap(R.id.bg, bmp)
 
                 // saat ve tarih boyutları widget boyutuna göre
-                val skyDp = hDp * 0.76f
-                val timeDp = min(skyDp * 0.30f, wDp * 0.16f)
-                val dateDp = (skyDp * 0.085f).coerceIn(9f, 14f)
+                val skyDp = hDp * Renderer.SKY_FRACTION
+                val timeDp = min(skyDp * 0.38f, wDp * 0.21f)
+                val dateDp = (skyDp * 0.115f).coerceIn(11f, 17f)
                 rv.setTextViewTextSize(R.id.time, TypedValue.COMPLEX_UNIT_DIP, timeDp)
                 rv.setTextViewTextSize(R.id.date, TypedValue.COMPLEX_UNIT_DIP, dateDp)
                 rv.setViewPadding(R.id.top_area, 0, 0, 0, (skyDp * 0.20f * dens).toInt())

@@ -20,7 +20,7 @@
             android:id="@+id/top_area"
             android:layout_width="match_parent"
             android:layout_height="0dp"
-            android:layout_weight="76"
+            android:layout_weight="70"
             android:gravity="center_horizontal|bottom"
             android:orientation="vertical"
             android:paddingBottom="22dp">
@@ -29,7 +29,7 @@
                 android:id="@+id/date"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:fontFamily="sans-serif"
+                android:fontFamily="sans-serif-medium"
                 android:format12Hour="EEEE, d MMMM"
                 android:format24Hour="EEEE, d MMMM"
                 android:includeFontPadding="false"
@@ -44,7 +44,7 @@
                 android:id="@+id/time"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:fontFamily="sans-serif-thin"
+                android:fontFamily="sans-serif"
                 android:format12Hour="HH:mm"
                 android:format24Hour="HH:mm"
                 android:includeFontPadding="false"
@@ -60,6 +60,6 @@
             android:id="@+id/news_hit"
             android:layout_width="match_parent"
             android:layout_height="0dp"
-            android:layout_weight="24" />
+            android:layout_weight="30" />
     </LinearLayout>
 </FrameLayout>

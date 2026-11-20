@@ -34,6 +34,9 @@ class Phase(val day: Boolean, val p: Float, val sunrise: Long, val sunset: Long)
 
 object Renderer {
 
+    /** Gökyüzü kısmının widget yüksekliğine oranı (geri kalanı haber şeridi) */
+    const val SKY_FRACTION = 0.70f
+
     // ---- Gün / gece hesabı ----
     fun phaseOf(w: Weather?, nowMs: Long): Phase {
         val now = nowMs / 1000
@@ -127,14 +130,83 @@ object Renderer {
         c.drawRoundRect(RectF(x - s * 1.1f, y - s * 0.02f, x + s * 1.18f, y + s * 0.5f), s * 0.25f, s * 0.25f, p)
     }
 
-    private fun drawDrop(c: Canvas, x: Float, top: Float, h: Float, p: Paint) {
-        val bottom = top + h
-        val path = Path()
-        path.moveTo(x, top)
-        path.cubicTo(x + h * 0.55f, top + h * 0.55f, x + h * 0.5f, bottom, x, bottom)
-        path.cubicTo(x - h * 0.5f, bottom, x - h * 0.55f, top + h * 0.55f, x, top)
-        path.close()
-        c.drawPath(path, p)
+    private fun drawSun(c: Canvas, x: Float, y: Float, r: Float, a: Int) {
+        val p = Paint(Paint.ANTI_ALIAS_FLAG)
+        p.color = 0xFFFFD36B.toInt()
+        p.alpha = a
+        c.drawCircle(x, y, r * 0.5f, p)
+        p.style = Paint.Style.STROKE
+        p.strokeWidth = r * 0.16f
+        p.strokeCap = Paint.Cap.ROUND
+        for (i in 0 until 8) {
+            val t = i * PI / 4
+            c.drawLine(
+                x + (r * 0.72f * cos(t)).toFloat(), y + (r * 0.72f * sin(t)).toFloat(),
+                x + (r * 0.98f * cos(t)).toFloat(), y + (r * 0.98f * sin(t)).toFloat(), p
+            )
+        }
+    }
+
+    private fun drawMoonIcon(c: Canvas, x: Float, y: Float, r: Float, a: Int) {
+        val layer = c.saveLayer(RectF(x - r, y - r, x + r, y + r), null)
+        val p = Paint(Paint.ANTI_ALIAS_FLAG)
+        p.color = 0xFFF3F1E4.toInt()
+        p.alpha = a
+        c.drawCircle(x, y, r * 0.62f, p)
+        p.xfermode = PorterDuffXfermode(PorterDuff.Mode.CLEAR)
+        c.drawCircle(x + r * 0.34f, y - r * 0.14f, r * 0.55f, p)
+        p.xfermode = null
+        c.restoreToCount(layer)
+    }
+
+    private fun drawCloudIcon(c: Canvas, x: Float, y: Float, r: Float, a: Int, dark: Boolean) {
+        val p = Paint(Paint.ANTI_ALIAS_FLAG)
+        p.color = if (dark) 0xFFC9D2E0.toInt() else 0xFFFFFFFF.toInt()
+        p.alpha = a
+        drawCloud(c, x, y, r * 0.5f, p)
+    }
+
+    /** Hava koduna göre küçük ikon; (x, y) ikonun merkezi, r yarıçapı */
+    private fun drawWeatherIcon(c: Canvas, code: Int, night: Boolean, x: Float, y: Float, r: Float, a: Int) {
+        val p = Paint(Paint.ANTI_ALIAS_FLAG)
+        when (code) {
+            0, 1 -> if (night) drawMoonIcon(c, x, y, r, a) else drawSun(c, x, y, r, a)
+            2 -> {
+                if (night) drawMoonIcon(c, x - r * 0.25f, y - r * 0.25f, r * 0.9f, a)
+                else drawSun(c, x - r * 0.25f, y - r * 0.25f, r * 0.85f, a)
+                drawCloudIcon(c, x + r * 0.12f, y + r * 0.22f, r, a, false)
+            }
+            3 -> drawCloudIcon(c, x, y, r, a, true)
+            45, 48 -> {
+                p.color = 0xFFDDE3EC.toInt(); p.alpha = a
+                p.style = Paint.Style.STROKE; p.strokeWidth = r * 0.16f; p.strokeCap = Paint.Cap.ROUND
+                for (i in -1..1) c.drawLine(x - r * 0.8f, y + i * r * 0.42f, x + r * 0.8f, y + i * r * 0.42f, p)
+            }
+            in 71..77, 85, 86 -> {
+                drawCloudIcon(c, x, y - r * 0.18f, r, a, true)
+                p.color = 0xFFFFFFFF.toInt(); p.alpha = a
+                for (i in -1..1) c.drawCircle(x + i * r * 0.5f, y + r * 0.72f, r * 0.10f, p)
+            }
+            in 95..99 -> {
+                drawCloudIcon(c, x, y - r * 0.22f, r, a, true)
+                p.color = 0xFFFFD36B.toInt(); p.alpha = a
+                p.style = Paint.Style.STROKE; p.strokeWidth = r * 0.16f; p.strokeCap = Paint.Cap.ROUND
+                c.drawLine(x + r * 0.1f, y + r * 0.2f, x - r * 0.1f, y + r * 0.55f, p)
+                c.drawLine(x - r * 0.1f, y + r * 0.55f, x + r * 0.15f, y + r * 0.6f, p)
+                c.drawLine(x + r * 0.15f, y + r * 0.6f, x - r * 0.05f, y + r * 0.95f, p)
+            }
+            else -> { // yağmur, çise, sağanak
+                drawCloudIcon(c, x, y - r * 0.18f, r, a, true)
+                p.color = 0xFF8FD3FF.toInt(); p.alpha = a
+                p.style = Paint.Style.STROKE; p.strokeWidth = r * 0.16f; p.strokeCap = Paint.Cap.ROUND
+                for (i in -1..1) {
+                    c.drawLine(
+                        x + i * r * 0.5f + r * 0.1f, y + r * 0.48f,
+                        x + i * r * 0.5f - r * 0.1f, y + r * 0.88f, p
+                    )
+                }
+            }
+        }
     }
 
     // ---- Ana çizim ----
@@ -146,11 +218,11 @@ object Renderer {
 
         val ph = phaseOf(s.weather, System.currentTimeMillis())
         val alt = ph.alt
-        val skyH = hf * 0.76f
+        val skyH = hf * SKY_FRACTION
         val hy = skyH * 0.84f          // ufuk çizgisi
         val cx = wf / 2f
         val rx = wf * 0.42f
-        val ry = skyH * 0.68f
+        val ry = skyH * 0.70f
 
         val corner = min(hf * 0.16f, 28f * dens)
         c.clipPath(Path().apply {
@@ -310,7 +382,7 @@ object Renderer {
             val tBase = pad + tp.textSize * 0.82f
             c.drawText("${weather.temp}°", pad, tBase, tp)
 
-            val rs = (skyH * 0.095f).coerceIn(9f * dens, 13f * dens)
+            val rs = (skyH * 0.105f).coerceIn(10f * dens, 14f * dens)
             val rp = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 color = 0xFFFFFFFF.toInt()
                 alpha = 225
@@ -318,10 +390,35 @@ object Renderer {
                 typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
                 setShadowLayer(3f * dens, 0f, 1f * dens, 0x66000000)
             }
-            val rowY = tBase + rs * 1.55f
-            val dp = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF8FD3FF.toInt() }
-            drawDrop(c, pad + rs * 0.32f, rowY - rs * 0.95f, rs * 1.05f, dp)
-            c.drawText("%${weather.rainProb}", pad + rs * 0.85f, rowY, rp)
+
+            // günün seyri: sabah / öğle / akşam / gece (ufuk şeridinde, iki saat etiketinin arasında)
+            if (weather.slots.isNotEmpty()) {
+                val nowSec = System.currentTimeMillis() / 1000
+                val n = weather.slots.size
+                val left = cx - rx + small * 3.4f
+                val right = cx + rx - small * 3.4f
+                val cellW = (right - left) / n
+                val ir = (skyH * 0.062f).coerceIn(6f * dens, 10f * dens)
+                val cy = hy + skyH * 0.095f
+                val sp = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = 0xFFFFFFFF.toInt()
+                    textSize = small
+                    typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+                }
+                for ((i, sl) in weather.slots.withIndex()) {
+                    val past = sl.epoch + 2 * 3600 < nowSec
+                    val current = !past && sl.epoch - 3600 <= nowSec
+                    val a = if (past) 110 else if (current) 255 else 215
+                    val night = sl.epoch < ph.sunrise || sl.epoch >= ph.sunset
+                    val label = "${sl.temp}°"
+                    val tw = sp.measureText(label)
+                    val total = ir * 2f + ir * 0.5f + tw
+                    val x0 = left + cellW * (i + 0.5f) - total / 2f
+                    drawWeatherIcon(c, sl.code, night, x0 + ir, cy, ir, a)
+                    sp.alpha = a
+                    c.drawText(label, x0 + ir * 2.5f, cy + small * 0.35f, sp)
+                }
+            }
 
             // sağ üst: durum
             val cond = conditionText(weather.code)
@@ -334,7 +431,7 @@ object Renderer {
 
         // 10) haber şeridi
         val regionH = hf - skyH
-        val mv = regionH * 0.13f
+        val mv = regionH * 0.10f
         val strip = RectF(pad * 0.8f, skyH + mv, wf - pad * 0.8f, hf - mv)
         val stripH = strip.height()
         val sc = stripH * 0.38f
@@ -346,31 +443,44 @@ object Renderer {
         c.drawRoundRect(strip, sc, sc, p)
         p.style = Paint.Style.FILL
 
-        val ts = (hf * 0.072f).coerceIn(9f * dens, 13f * dens)
-        val textPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = 0xFFFFFFFF.toInt()
-            textSize = ts
-            typeface = Typeface.create("sans-serif", Typeface.NORMAL)
-        }
-        val inner = stripH * 0.38f
+        val inner = stripH * 0.30f
         val hl = s.headline
         val labelText = hl?.source ?: ""
+        val textPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0xFFFFFFFF.toInt()
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+        }
         val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = if (hl != null) sourceColor(hl.source) else 0xFFFFFFFF.toInt()
-            textSize = ts * 0.82f
             typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
         }
-        val labelW = if (labelText.isEmpty()) 0f else labelPaint.measureText(labelText) + inner * 0.7f
-        val textX = strip.left + inner + labelW
-        val textW = (strip.right - inner - textX).toInt().coerceAtLeast(40)
         val text = hl?.title ?: "Haberler yükleniyor…"
-        val lineH = ts * 1.22f
-        val maxLines = if (stripH * 0.92f >= lineH * 2f) 2 else 1
-        val layout = StaticLayout.Builder.obtain(text, 0, text.length, textPaint, textW)
-            .setMaxLines(maxLines)
-            .setEllipsize(TextUtils.TruncateAt.END)
-            .setAlignment(Layout.Alignment.ALIGN_NORMAL)
-            .build()
+
+        // Başlığın tamamı sığsın: yazıyı büyükten küçüğe dene, sığan en büyüğünü seç
+        val maxTs = min(15f * dens, hf * 0.095f)
+        val minTs = 9f * dens
+        fun buildLayout(size: Float): Pair<StaticLayout, Float> {
+            textPaint.textSize = size
+            labelPaint.textSize = size * 0.82f
+            val labelW = if (labelText.isEmpty()) 0f else labelPaint.measureText(labelText) + inner * 0.7f
+            val x = strip.left + inner + labelW
+            val textW = (strip.right - inner - x).toInt().coerceAtLeast(40)
+            val fitLines = ((stripH * 0.90f) / (size * 1.22f)).toInt().coerceAtLeast(1)
+            val l = StaticLayout.Builder.obtain(text, 0, text.length, textPaint, textW)
+                .setMaxLines(fitLines)
+                .setEllipsize(TextUtils.TruncateAt.END)
+                .setAlignment(Layout.Alignment.ALIGN_NORMAL)
+                .build()
+            return l to x
+        }
+        var ts = maxTs
+        var built = buildLayout(ts)
+        while (built.first.getEllipsisCount(built.first.lineCount - 1) > 0 && ts > minTs) {
+            ts = (ts - 0.5f * dens).coerceAtLeast(minTs)
+            built = buildLayout(ts)
+        }
+        val layout = built.first
+        val textX = built.second
         val ty = strip.top + (stripH - layout.height) / 2f
         c.save()
         c.translate(textX, ty)

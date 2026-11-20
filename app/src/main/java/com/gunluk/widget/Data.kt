@@ -17,12 +17,16 @@ import kotlin.math.roundToInt
 
 data class Headline(val source: String, val title: String, val link: String)
 
+/** Günün bir vakti: sabah / öğle / akşam / gece */
+data class Slot(val epoch: Long, val temp: Int, val code: Int)
+
 data class Weather(
     val temp: Int,
     val code: Int,
     val rainProb: Int,
     val sunrise: Long, // epoch saniye (bugünün gün doğumu)
-    val sunset: Long   // epoch saniye (bugünün gün batımı)
+    val sunset: Long,  // epoch saniye (bugünün gün batımı)
+    val slots: List<Slot>
 )
 
 data class State(val weather: Weather?, val headline: Headline?)
@@ -127,7 +131,7 @@ object Data {
     fun refresh(ctx: Context, force: Boolean): Boolean {
         val now = System.currentTimeMillis()
         val p = prefs(ctx)
-        val needW = force || now - p.getLong("wAt", 0L) > 30 * 60_000L
+        val needW = force || p.getInt("wVer", 0) < 2 || now - p.getLong("wAt", 0L) > 30 * 60_000L
         val needN = force || now - p.getLong("nAt", 0L) > 12 * 60_000L
         if (!needW && !needN) return false
 
@@ -139,6 +143,7 @@ object Data {
             val url = "https://api.open-meteo.com/v1/forecast?latitude=$lat&longitude=$lon" +
                 "&current=temperature_2m,weather_code" +
                 "&daily=sunrise,sunset,precipitation_probability_max" +
+                "&hourly=temperature_2m,weather_code" +
                 "&timezone=auto&forecast_days=1"
             threads.add(thread(isDaemon = true) {
                 httpGet(url)?.let { results["w"] = it }
@@ -169,7 +174,7 @@ object Data {
 
         results["w"]?.let { json ->
             if (parseWeather(json) != null) {
-                edit.putString("wJson", json).putLong("wAt", now)
+                edit.putString("wJson", json).putLong("wAt", now).putInt("wVer", 2)
                 changed = true
             }
         }
@@ -217,12 +222,28 @@ object Data {
             val sr = LocalDateTime.parse(d.getJSONArray("sunrise").getString(0)).toEpochSecond(zone)
             val ss = LocalDateTime.parse(d.getJSONArray("sunset").getString(0)).toEpochSecond(zone)
             val rain = d.optJSONArray("precipitation_probability_max")?.optInt(0, 0) ?: 0
+
+            // günün dört vakti: 09, 13, 18, 22
+            val slots = ArrayList<Slot>()
+            val hr = o.optJSONObject("hourly")
+            if (hr != null) {
+                val times = hr.getJSONArray("time")
+                val temps = hr.getJSONArray("temperature_2m")
+                val codes = hr.getJSONArray("weather_code")
+                for (h in intArrayOf(9, 13, 18, 22)) {
+                    if (h < times.length() && h < temps.length() && h < codes.length()) {
+                        val ep = LocalDateTime.parse(times.getString(h)).toEpochSecond(zone)
+                        slots.add(Slot(ep, temps.getDouble(h).roundToInt(), codes.getInt(h)))
+                    }
+                }
+            }
             Weather(
                 cur.getDouble("temperature_2m").roundToInt(),
                 cur.getInt("weather_code"),
                 rain,
                 sr,
-                ss
+                ss,
+                slots
             )
         } catch (e: Exception) {
             null
