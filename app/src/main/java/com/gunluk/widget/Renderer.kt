@@ -12,13 +12,10 @@ import android.graphics.RadialGradient
 import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.Typeface
-import android.text.Layout
-import android.text.StaticLayout
-import android.text.TextPaint
-import android.text.TextUtils
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
+import java.util.Locale
 import java.util.Random
 import kotlin.math.PI
 import kotlin.math.abs
@@ -32,16 +29,25 @@ class Phase(val day: Boolean, val p: Float, val sunrise: Long, val sunset: Long)
     val alt: Float = if (day) sin(PI * p).toFloat() else -sin(PI * p).toFloat()
 }
 
+/** Zaman çizelgesindeki bir işaret: hava olayının başladığı/bittiği saat */
+class Marker(
+    val label: String,
+    val temp: Int,
+    val code: Int,
+    val night: Boolean,
+    val notable: Boolean
+)
+
 object Renderer {
 
-    /** Gökyüzü kısmının widget yüksekliğine oranı (geri kalanı haber şeridi) */
-    const val SKY_FRACTION = 0.70f
+    /** Gökyüzü (kubbe) kısmının yüksekliğe oranı; altı tepeler + zaman çizelgesi */
+    const val SKY_FRACTION = 0.68f
 
     // ---- Gün / gece hesabı ----
     fun phaseOf(w: Weather?, nowMs: Long): Phase {
         val now = nowMs / 1000
-        var sr: Long
-        var ss: Long
+        val sr: Long
+        val ss: Long
         if (w != null && w.sunset > w.sunrise) {
             sr = w.sunrise
             ss = w.sunset
@@ -96,13 +102,13 @@ object Renderer {
 
     private fun conditionText(code: Int): String = when (code) {
         0 -> "Açık"
-        1 -> "Çoğunlukla açık"
-        2 -> "Parçalı bulutlu"
+        1 -> "Az bulutlu"
+        2 -> "Bulutlu"
         3 -> "Kapalı"
         45, 48 -> "Sisli"
-        in 51..57 -> "Çise"
+        in 51..57 -> "Çiseleme"
         in 61..65 -> "Yağmurlu"
-        66, 67 -> "Dondurucu yağmur"
+        66, 67 -> "Buzlu yağmur"
         in 71..77 -> "Karlı"
         in 80..82 -> "Sağanak"
         85, 86 -> "Kar sağanağı"
@@ -116,13 +122,58 @@ object Renderer {
         else -> 3
     }
 
-    private fun sourceColor(src: String): Int = when (src) {
-        "AA" -> 0xFFFF8A80.toInt()
-        "TRT" -> 0xFF8AD1FF.toInt()
-        "BBC" -> 0xFFFFD98A.toInt()
-        else -> 0xFFFFFFFF.toInt()
+    // ---- Zaman çizelgesi: önemli hava olayları ----
+    /** 0 açık, 1 bulutlu, 2 kapalı, 3 sis, 4 yağmur, 5 kar, 6 fırtına */
+    private fun cat(code: Int): Int = when (code) {
+        0, 1 -> 0
+        2 -> 1
+        3 -> 2
+        45, 48 -> 3
+        in 51..67, in 80..82 -> 4
+        in 71..77, 85, 86 -> 5
+        in 95..99 -> 6
+        else -> 0
     }
 
+    private fun isNight(epoch: Long, ph: Phase): Boolean {
+        val k = Math.floorMod(epoch - ph.sunrise, 86400L)
+        return k >= (ph.sunset - ph.sunrise)
+    }
+
+    fun markers(w: Weather, ph: Phase, nowSec: Long): List<Marker> {
+        val hrs = w.hours.filter { it.epoch >= nowSec - 3599 && it.epoch <= nowSec + 20 * 3600 }
+        if (hrs.isEmpty()) return emptyList()
+        val fmt = SimpleDateFormat("HH:mm", Locale.getDefault())
+        fun label(s: Slot) = fmt.format(Date(s.epoch * 1000))
+
+        val out = ArrayList<Marker>()
+        out.add(Marker("Şimdi", hrs[0].temp, hrs[0].code, isNight(nowSec, ph), cat(hrs[0].code) >= 3))
+        var prev = cat(hrs[0].code)
+        for (i in 1 until hrs.size) {
+            val h = hrs[i]
+            val cur = cat(h.code)
+            val imp = cur >= 3
+            val prevImp = prev >= 3
+            if (imp && cur != prev) {
+                out.add(Marker(label(h), h.temp, h.code, isNight(h.epoch, ph), true))   // olay başlıyor
+            } else if (!imp && prevImp) {
+                out.add(Marker(label(h), h.temp, h.code, isNight(h.epoch, ph), false))  // olay bitiyor
+            }
+            prev = cur
+        }
+        // Önemli bir olay yoksa gün boyu seyri göster
+        if (out.size == 1) {
+            for (off in intArrayOf(5, 10, 15)) {
+                if (off < hrs.size) {
+                    val h = hrs[off]
+                    out.add(Marker(label(h), h.temp, h.code, isNight(h.epoch, ph), false))
+                }
+            }
+        }
+        return out.take(5)
+    }
+
+    // ---- İkonlar ----
     private fun drawCloud(c: Canvas, x: Float, y: Float, s: Float, p: Paint) {
         c.drawCircle(x - s * 0.62f, y, s * 0.5f, p)
         c.drawCircle(x, y - s * 0.28f, s * 0.68f, p)
@@ -166,7 +217,7 @@ object Renderer {
         drawCloud(c, x, y, r * 0.5f, p)
     }
 
-    /** Hava koduna göre küçük ikon; (x, y) ikonun merkezi, r yarıçapı */
+    /** (x, y) ikonun merkezi, r yarıçapı */
     private fun drawWeatherIcon(c: Canvas, code: Int, night: Boolean, x: Float, y: Float, r: Float, a: Int) {
         val p = Paint(Paint.ANTI_ALIAS_FLAG)
         when (code) {
@@ -209,20 +260,30 @@ object Renderer {
         }
     }
 
+    /** Yazıyı verilen genişliğe sığana kadar küçült */
+    private fun fitText(p: Paint, text: String, maxW: Float, startSize: Float, minSize: Float) {
+        var s = startSize
+        p.textSize = s
+        while (p.measureText(text) > maxW && s > minSize) {
+            s -= 0.5f
+            p.textSize = s
+        }
+    }
+
     // ---- Ana çizim ----
     fun render(w: Int, h: Int, dens: Float, s: State): Bitmap {
         val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
         val c = Canvas(bmp)
         val wf = w.toFloat()
         val hf = h.toFloat()
+        val nowMs = System.currentTimeMillis()
 
-        val ph = phaseOf(s.weather, System.currentTimeMillis())
+        val ph = phaseOf(s.weather, nowMs)
         val alt = ph.alt
-        val skyH = hf * SKY_FRACTION
-        val hy = skyH * 0.84f          // ufuk çizgisi
+        val hy = hf * SKY_FRACTION     // ufuk çizgisi
         val cx = wf / 2f
         val rx = wf * 0.42f
-        val ry = skyH * 0.70f
+        val ry = hf * 0.60f
 
         val corner = min(hf * 0.16f, 28f * dens)
         c.clipPath(Path().apply {
@@ -281,8 +342,8 @@ object Renderer {
                 p.alpha = ((0.10f + 0.14f * dayF) * 255).toInt()
                 for (i in 0 until n) {
                     val x = wf * (0.22f + 0.30f * i)
-                    val y = skyH * (0.30f + 0.10f * (i % 2))
-                    drawCloud(c, x, y, skyH * (0.075f + 0.012f * i), p)
+                    val y = hy * (0.34f + 0.10f * (i % 2))
+                    drawCloud(c, x, y, hf * (0.06f + 0.010f * i), p)
                 }
                 p.alpha = 255
             }
@@ -306,8 +367,8 @@ object Renderer {
 
         // 6) güneş veya ay
         if (ph.day) {
-            val r = skyH * 0.058f
-            val warm = ((0.5f - alt) / 0.5f).coerceIn(0f, 1f) // ufka yakınken turuncu
+            val r = hf * 0.048f
+            val warm = ((0.5f - alt) / 0.5f).coerceIn(0f, 1f)
             val glowC = lerp(0xFFFFE9A8.toInt(), 0xFFFF9A4D.toInt(), warm)
             p.shader = RadialGradient(
                 bx, by, r * 4.6f,
@@ -324,7 +385,7 @@ object Renderer {
             c.drawCircle(bx, by, r, p)
             p.shader = null
         } else {
-            val r = skyH * 0.052f
+            val r = hf * 0.044f
             p.shader = RadialGradient(
                 bx, by, r * 4f,
                 intArrayOf(0x44CFE0FF, 0x00CFE0FF),
@@ -341,153 +402,125 @@ object Renderer {
             c.restoreToCount(layer)
         }
 
-        // 7) ufuk: tepeler (güneş/ay buraya batar)
+        // 7) ufuk: tepeler (güneş/ay buraya batar), altı zaman çizelgesi zemini
         val g = Path()
-        g.moveTo(0f, hy + skyH * 0.02f)
-        g.cubicTo(wf * 0.25f, hy - skyH * 0.05f, wf * 0.45f, hy + skyH * 0.04f, wf * 0.65f, hy)
-        g.cubicTo(wf * 0.80f, hy - skyH * 0.03f, wf * 0.92f, hy + skyH * 0.02f, wf, hy - skyH * 0.01f)
+        g.moveTo(0f, hy + hf * 0.015f)
+        g.cubicTo(wf * 0.25f, hy - hf * 0.035f, wf * 0.45f, hy + hf * 0.03f, wf * 0.65f, hy)
+        g.cubicTo(wf * 0.80f, hy - hf * 0.02f, wf * 0.92f, hy + hf * 0.015f, wf, hy - hf * 0.008f)
         g.lineTo(wf, hf)
         g.lineTo(0f, hf)
         g.close()
         p.shader = LinearGradient(
-            0f, hy - skyH * 0.05f, 0f, hf,
-            0x59000000, 0x99000000.toInt(), Shader.TileMode.CLAMP
+            0f, hy - hf * 0.04f, 0f, hf,
+            0x59000000, 0xA6000000.toInt(), Shader.TileMode.CLAMP
         )
         c.drawPath(g, p)
         p.shader = null
 
-        // 8) gün doğumu / batımı saatleri (küçük)
-        val fmt = SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
-        val small = (skyH * 0.085f).coerceIn(8f * dens, 11.5f * dens)
+        // 8) gün doğumu / batımı saatleri (iki uçta)
+        val fmt = SimpleDateFormat("HH:mm", Locale.getDefault())
+        val small = (hf * 0.062f).coerceIn(8f * dens, 11.5f * dens)
         val lp = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = 0xFFFFFFFF.toInt()
-            alpha = 185
+            alpha = 190
             textSize = small
             textAlign = Paint.Align.CENTER
-            typeface = Typeface.create("sans-serif", Typeface.NORMAL)
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
         }
-        val ly = hy + skyH * 0.115f
-        c.drawText(fmt.format(Date(ph.sunrise * 1000)), cx - rx, ly, lp)
-        c.drawText(fmt.format(Date(ph.sunset * 1000)), cx + rx, ly, lp)
+        val rowA = hy + hf * 0.085f
+        c.drawText(fmt.format(Date(ph.sunrise * 1000)), cx - rx, rowA, lp)
+        c.drawText(fmt.format(Date(ph.sunset * 1000)), cx + rx, rowA, lp)
 
-        // 9) hava: sol üst
         val pad = min(wf * 0.045f, 16f * dens)
+
         if (weather != null) {
+            // 9) şu anki hava: sol üst, büyük
             val tp = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 color = 0xFFFFFFFF.toInt()
-                textSize = (skyH * 0.20f).coerceIn(16f * dens, 34f * dens)
-                typeface = Typeface.create("sans-serif-light", Typeface.NORMAL)
+                textSize = (hf * 0.19f).coerceIn(18f * dens, 42f * dens)
+                typeface = Typeface.create("sans-serif", Typeface.NORMAL)
                 setShadowLayer(4f * dens, 0f, 1f * dens, 0x66000000)
             }
-            val tBase = pad + tp.textSize * 0.82f
+            val tBase = pad + tp.textSize * 0.80f
             c.drawText("${weather.temp}°", pad, tBase, tp)
 
-            val rs = (skyH * 0.105f).coerceIn(10f * dens, 14f * dens)
-            val rp = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            val maxW = wf * 0.215f - pad
+            val cp = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 color = 0xFFFFFFFF.toInt()
-                alpha = 225
-                textSize = rs
+                alpha = 235
                 typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
                 setShadowLayer(3f * dens, 0f, 1f * dens, 0x66000000)
             }
-
-            // günün seyri: sabah / öğle / akşam / gece (ufuk şeridinde, iki saat etiketinin arasında)
-            if (weather.slots.isNotEmpty()) {
-                val nowSec = System.currentTimeMillis() / 1000
-                val n = weather.slots.size
-                val left = cx - rx + small * 3.4f
-                val right = cx + rx - small * 3.4f
-                val cellW = (right - left) / n
-                val ir = (skyH * 0.062f).coerceIn(6f * dens, 10f * dens)
-                val cy = hy + skyH * 0.095f
-                val sp = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                    color = 0xFFFFFFFF.toInt()
-                    textSize = small
-                    typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-                }
-                for ((i, sl) in weather.slots.withIndex()) {
-                    val past = sl.epoch + 2 * 3600 < nowSec
-                    val current = !past && sl.epoch - 3600 <= nowSec
-                    val a = if (past) 110 else if (current) 255 else 215
-                    val night = sl.epoch < ph.sunrise || sl.epoch >= ph.sunset
-                    val label = "${sl.temp}°"
-                    val tw = sp.measureText(label)
-                    val total = ir * 2f + ir * 0.5f + tw
-                    val x0 = left + cellW * (i + 0.5f) - total / 2f
-                    drawWeatherIcon(c, sl.code, night, x0 + ir, cy, ir, a)
-                    sp.alpha = a
-                    c.drawText(label, x0 + ir * 2.5f, cy + small * 0.35f, sp)
-                }
-            }
-
-            // sağ üst: durum
             val cond = conditionText(weather.code)
             if (cond.isNotEmpty()) {
-                rp.textAlign = Paint.Align.RIGHT
-                rp.alpha = 205
-                c.drawText(cond, wf - pad, pad + rs * 1.0f, rp)
+                fitText(cp, cond, maxW, (hf * 0.082f).coerceIn(10f * dens, 14f * dens), 8f * dens)
+                c.drawText(cond, pad, tBase + cp.textSize * 1.25f, cp)
             }
-        }
 
-        // 10) haber şeridi
-        val regionH = hf - skyH
-        val mv = regionH * 0.10f
-        val strip = RectF(pad * 0.8f, skyH + mv, wf - pad * 0.8f, hf - mv)
-        val stripH = strip.height()
-        val sc = stripH * 0.38f
-        p.color = 0x40000000
-        c.drawRoundRect(strip, sc, sc, p)
-        p.style = Paint.Style.STROKE
-        p.strokeWidth = 1f * dens
-        p.color = 0x28FFFFFF
-        c.drawRoundRect(strip, sc, sc, p)
-        p.style = Paint.Style.FILL
+            // sağ üst: bugünün en yüksek / en düşük derecesi
+            val win = weather.hours.filter {
+                it.epoch >= nowMs / 1000 - 3599 && it.epoch <= nowMs / 1000 + 18 * 3600
+            }
+            if (win.isNotEmpty()) {
+                val hi = win.maxOf { it.temp }
+                val lo = win.minOf { it.temp }
+                val hp = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = 0xFFFFFFFF.toInt()
+                    alpha = 235
+                    textAlign = Paint.Align.RIGHT
+                    typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+                    setShadowLayer(3f * dens, 0f, 1f * dens, 0x66000000)
+                }
+                fitText(hp, "↑$hi°", maxW, (hf * 0.095f).coerceIn(10f * dens, 15f * dens), 8f * dens)
+                val y1 = pad + hp.textSize * 0.85f
+                c.drawText("↑$hi°", wf - pad, y1, hp)
+                c.drawText("↓$lo°", wf - pad, y1 + hp.textSize * 1.3f, hp)
+            }
 
-        val inner = stripH * 0.30f
-        val hl = s.headline
-        val labelText = hl?.source ?: ""
-        val textPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = 0xFFFFFFFF.toInt()
-            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-        }
-        val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = if (hl != null) sourceColor(hl.source) else 0xFFFFFFFF.toInt()
-            typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
-        }
-        val text = hl?.title ?: "Haberler yükleniyor…"
+            // 10) zaman çizelgesi: önemli hava olayları küçük saatiyle
+            val mk = markers(weather, ph, nowMs / 1000)
+            if (mk.isNotEmpty()) {
+                val ir = (hf * 0.055f).coerceIn(6f * dens, 10f * dens)
+                val tiny = (hf * 0.052f).coerceIn(7f * dens, 10f * dens)
+                val tempSize = (hf * 0.07f).coerceIn(8f * dens, 12.5f * dens)
+                val cy = hy + hf * 0.185f
+                val labelY = hy + hf * 0.285f
+                val cellW = wf * 0.80f / 5f
+                val startX = cx - mk.size * cellW / 2f
 
-        // Başlığın tamamı sığsın: yazıyı büyükten küçüğe dene, sığan en büyüğünü seç
-        val maxTs = min(15f * dens, hf * 0.095f)
-        val minTs = 9f * dens
-        fun buildLayout(size: Float): Pair<StaticLayout, Float> {
-            textPaint.textSize = size
-            labelPaint.textSize = size * 0.82f
-            val labelW = if (labelText.isEmpty()) 0f else labelPaint.measureText(labelText) + inner * 0.7f
-            val x = strip.left + inner + labelW
-            val textW = (strip.right - inner - x).toInt().coerceAtLeast(40)
-            val fitLines = ((stripH * 0.90f) / (size * 1.22f)).toInt().coerceAtLeast(1)
-            val l = StaticLayout.Builder.obtain(text, 0, text.length, textPaint, textW)
-                .setMaxLines(fitLines)
-                .setEllipsize(TextUtils.TruncateAt.END)
-                .setAlignment(Layout.Alignment.ALIGN_NORMAL)
-                .build()
-            return l to x
-        }
-        var ts = maxTs
-        var built = buildLayout(ts)
-        while (built.first.getEllipsisCount(built.first.lineCount - 1) > 0 && ts > minTs) {
-            ts = (ts - 0.5f * dens).coerceAtLeast(minTs)
-            built = buildLayout(ts)
-        }
-        val layout = built.first
-        val textX = built.second
-        val ty = strip.top + (stripH - layout.height) / 2f
-        c.save()
-        c.translate(textX, ty)
-        layout.draw(c)
-        c.restore()
-        if (labelText.isNotEmpty()) {
-            c.drawText(labelText, strip.left + inner, ty + layout.getLineBaseline(0), labelPaint)
+                val tmp = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = 0xFFFFFFFF.toInt()
+                    textSize = tempSize
+                    typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+                }
+                val hp2 = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = 0xFFFFFFFF.toInt()
+                    textSize = tiny
+                    textAlign = Paint.Align.CENTER
+                    typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+                }
+                val pill = Paint(Paint.ANTI_ALIAS_FLAG)
+
+                for ((i, m) in mk.withIndex()) {
+                    val xc = startX + cellW * (i + 0.5f)
+                    if (m.notable) {
+                        pill.color = 0x2EFFFFFF
+                        c.drawRoundRect(
+                            RectF(xc - cellW * 0.47f, cy - ir * 1.45f, xc + cellW * 0.47f, labelY + tiny * 0.55f),
+                            ir * 0.9f, ir * 0.9f, pill
+                        )
+                    }
+                    val label = "${m.temp}°"
+                    val tw2 = tmp.measureText(label)
+                    val total = ir * 2f + ir * 0.45f + tw2
+                    val x0 = xc - total / 2f
+                    drawWeatherIcon(c, m.code, m.night, x0 + ir, cy, ir, 255)
+                    tmp.alpha = 255
+                    c.drawText(label, x0 + ir * 2.45f, cy + tempSize * 0.35f, tmp)
+                    hp2.alpha = if (m.notable) 255 else 200
+                    c.drawText(m.label, xc, labelY, hp2)
+                }
+            }
         }
 
         return bmp

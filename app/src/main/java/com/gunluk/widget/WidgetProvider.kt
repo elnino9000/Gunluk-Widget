@@ -8,7 +8,6 @@ import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
 import android.os.Bundle
 import android.util.TypedValue
 import android.widget.RemoteViews
@@ -24,12 +23,11 @@ class WidgetProvider : AppWidgetProvider() {
 
         fun schedule(ctx: Context) {
             val am = ctx.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-            val pi = tickIntent(ctx)
             am.setInexactRepeating(
                 AlarmManager.RTC,
                 System.currentTimeMillis() + TICK_MS,
                 TICK_MS,
-                pi
+                tickIntent(ctx)
             )
         }
 
@@ -38,11 +36,27 @@ class WidgetProvider : AppWidgetProvider() {
             am.cancel(tickIntent(ctx))
         }
 
+        /** Veri gelmediyse bir dakika sonra yeniden dene */
+        private fun retrySoon(ctx: Context) {
+            val am = ctx.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+            am.setAndAllowWhileIdle(
+                AlarmManager.RTC,
+                System.currentTimeMillis() + 60_000L,
+                retryIntent(ctx)
+            )
+        }
+
         private fun tickIntent(ctx: Context): PendingIntent {
             val i = Intent(ctx, WidgetProvider::class.java).setAction(ACTION_TICK)
             return PendingIntent.getBroadcast(
-                ctx, 0, i,
-                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+                ctx, 0, i, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            )
+        }
+
+        private fun retryIntent(ctx: Context): PendingIntent {
+            val i = Intent(ctx, WidgetProvider::class.java).setAction(ACTION_TICK)
+            return PendingIntent.getBroadcast(
+                ctx, 5, i, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
             )
         }
 
@@ -65,6 +79,7 @@ class WidgetProvider : AppWidgetProvider() {
             if (ids.isEmpty()) return
             push(ctx, mgr, ids) // önce önbellekle hızlıca çiz
             if (Data.refresh(ctx, force)) push(ctx, mgr, ids)
+            if (Data.load(ctx).weather == null) retrySoon(ctx)
         }
 
         private fun push(ctx: Context, mgr: AppWidgetManager, ids: IntArray) {
@@ -87,38 +102,21 @@ class WidgetProvider : AppWidgetProvider() {
                 val rv = RemoteViews(ctx.packageName, R.layout.widget)
                 rv.setImageViewBitmap(R.id.bg, bmp)
 
-                // saat ve tarih boyutları widget boyutuna göre
-                val skyDp = hDp * Renderer.SKY_FRACTION
-                val timeDp = min(skyDp * 0.38f, wDp * 0.21f)
-                val dateDp = (skyDp * 0.115f).coerceIn(11f, 17f)
+                // saat ve tarih: büyük, widget boyutuna göre
+                val timeDp = min(hDp * 0.30f, wDp * 0.20f)
+                val dateDp = (hDp * 0.095f).coerceIn(11f, 17f)
                 rv.setTextViewTextSize(R.id.time, TypedValue.COMPLEX_UNIT_DIP, timeDp)
                 rv.setTextViewTextSize(R.id.date, TypedValue.COMPLEX_UNIT_DIP, dateDp)
-                rv.setViewPadding(R.id.top_area, 0, 0, 0, (skyDp * 0.20f * dens).toInt())
+                rv.setViewPadding(R.id.top_area, 0, 0, 0, (hDp * 0.05f * dens).toInt())
 
-                // üst alan: yenile
+                // dokununca yenile
                 val refreshPi = PendingIntent.getBroadcast(
                     ctx, 1,
                     Intent(ctx, WidgetProvider::class.java).setAction(ACTION_REFRESH),
                     PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
                 )
                 rv.setOnClickPendingIntent(R.id.top_area, refreshPi)
-
-                // alt şerit: haberi aç
-                val link = st.headline?.link
-                val newsPi = if (link != null) {
-                    PendingIntent.getActivity(
-                        ctx, 2,
-                        Intent(Intent.ACTION_VIEW, Uri.parse(link)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-                    )
-                } else {
-                    PendingIntent.getActivity(
-                        ctx, 3,
-                        Intent(ctx, MainActivity::class.java),
-                        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-                    )
-                }
-                rv.setOnClickPendingIntent(R.id.news_hit, newsPi)
+                rv.setOnClickPendingIntent(R.id.ground_hit, refreshPi)
 
                 mgr.updateAppWidget(id, rv)
             }
@@ -145,10 +143,7 @@ class WidgetProvider : AppWidgetProvider() {
 
     override fun onReceive(ctx: Context, intent: Intent) {
         when (intent.action) {
-            ACTION_REFRESH -> {
-                Data.bumpNews(ctx)
-                go(ctx, true, goAsync())
-            }
+            ACTION_REFRESH -> go(ctx, true, goAsync())
             ACTION_TICK -> go(ctx, false, goAsync())
             Intent.ACTION_BOOT_COMPLETED -> {
                 schedule(ctx)
