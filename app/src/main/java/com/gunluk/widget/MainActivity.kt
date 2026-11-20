@@ -3,18 +3,22 @@ package com.gunluk.widget
 import android.Manifest
 import android.app.Activity
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.view.Gravity
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
+import kotlin.concurrent.thread
 
 class MainActivity : Activity() {
 
@@ -42,7 +46,8 @@ class MainActivity : Activity() {
         }
         val info = TextView(this).apply {
             text = "Ana ekranda boş bir yere uzun bas → Widget'lar → Günlük Widget'ı seç.\n\n" +
-                "Hava durumu ve gün doğumu/batımı için konumun gerekir. Aşağıdaki tuşa basıp izin ver."
+                "Hava durumu için konumun gerekir. Her gün farklı ilçeye gidiyorsan, konumun " +
+                "kendiliğinden güncellenmesi için iki izni de ver: önce konum, sonra \"her zaman\"."
             textSize = 16f
             setTextColor(0xE6FFFFFF.toInt())
             setPadding(0, (20 * d).toInt(), 0, (20 * d).toInt())
@@ -53,8 +58,12 @@ class MainActivity : Activity() {
             setPadding(0, 0, 0, (16 * d).toInt())
         }
         val locBtn = Button(this).apply {
-            text = "Konumu güncelle"
+            text = "Konum izni ver / konumu güncelle"
             setOnClickListener { ensureLocation() }
+        }
+        val bgBtn = Button(this).apply {
+            text = "Her zaman izni ver (otomatik güncelleme)"
+            setOnClickListener { askBackground() }
         }
         val refreshBtn = Button(this).apply {
             text = "Widget'ı yenile"
@@ -71,31 +80,63 @@ class MainActivity : Activity() {
         root.addView(info)
         root.addView(status)
         root.addView(locBtn)
+        root.addView(bgBtn)
         root.addView(refreshBtn)
         setContentView(root)
 
+        if (!Loc.hasForeground(this)) ensureLocation() else captureLocation()
+    }
+
+    override fun onResume() {
+        super.onResume()
         updateStatus()
-        if (!Data.hasCoords(this)) ensureLocation()
     }
 
     private fun updateStatus() {
-        status.text = if (Data.hasCoords(this)) "Konum kayıtlı ✓" else "Konum henüz kayıtlı değil (İstanbul varsayılan)"
+        val place = Data.place(this)
+        status.text = when {
+            !Loc.hasForeground(this) -> "Konum izni yok (İstanbul varsayılan)"
+            !Loc.hasBackground(this) ->
+                "Konum kayıtlı${if (place != null) ": $place" else ""}. Kendiliğinden güncellenmesi için \"Her zaman\" izni ver."
+            else -> "Konum otomatik güncelleniyor ✓${if (place != null) " ($place)" else ""}"
+        }
     }
 
-    private fun hasPermission() =
-        checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
-
     private fun ensureLocation() {
-        if (!hasPermission()) {
+        if (!Loc.hasForeground(this)) {
             requestPermissions(arrayOf(Manifest.permission.ACCESS_COARSE_LOCATION), 7)
             return
         }
         captureLocation()
     }
 
+    private fun askBackground() {
+        if (!Loc.hasForeground(this)) {
+            ensureLocation()
+            return
+        }
+        if (Loc.hasBackground(this)) {
+            Toast.makeText(this, "Zaten verilmiş ✓", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (Build.VERSION.SDK_INT == 29) {
+            requestPermissions(arrayOf(Manifest.permission.ACCESS_BACKGROUND_LOCATION), 8)
+        } else {
+            // Android 11 ve üstü: izin ayar sayfasından verilir
+            Toast.makeText(this, "Konum → \"Her zaman izin ver\" seçeneğini seç", Toast.LENGTH_LONG).show()
+            startActivity(
+                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", packageName, null))
+            )
+        }
+    }
+
     override fun onRequestPermissionsResult(code: Int, perms: Array<out String>, results: IntArray) {
         super.onRequestPermissionsResult(code, perms, results)
-        if (hasPermission()) captureLocation() else status.text = "Konum izni verilmedi, İstanbul kullanılacak"
+        if (code == 7 && Loc.hasForeground(this)) {
+            captureLocation()
+            if (!Loc.hasBackground(this)) askBackground()
+        }
+        updateStatus()
     }
 
     @Suppress("DEPRECATION", "MissingPermission")
@@ -133,10 +174,12 @@ class MainActivity : Activity() {
     }
 
     private fun save(l: Location) {
-        Data.setCoords(this, l.latitude, l.longitude)
-        updateStatus()
-        sendBroadcast(
-            Intent(this, WidgetProvider::class.java).setAction(WidgetProvider.ACTION_REFRESH)
-        )
+        thread {
+            Loc.apply(this, l)
+            sendBroadcast(
+                Intent(this, WidgetProvider::class.java).setAction(WidgetProvider.ACTION_REFRESH)
+            )
+            runOnUiThread { updateStatus() }
+        }
     }
 }

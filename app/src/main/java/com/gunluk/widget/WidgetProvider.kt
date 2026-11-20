@@ -78,7 +78,9 @@ class WidgetProvider : AppWidgetProvider() {
             val ids = mgr.getAppWidgetIds(ComponentName(ctx, WidgetProvider::class.java))
             if (ids.isEmpty()) return
             push(ctx, mgr, ids) // önce önbellekle hızlıca çiz
-            if (Data.refresh(ctx, force)) push(ctx, mgr, ids)
+            val moved = try { Loc.update(ctx) } catch (e: Exception) { false } // yer değiştiyse yeni konum
+            if (Data.refresh(ctx, force || moved)) push(ctx, mgr, ids)
+            else if (moved) push(ctx, mgr, ids)
             if (Data.load(ctx).weather == null) retrySoon(ctx)
         }
 

@@ -19,7 +19,7 @@ data class Weather(
     val hours: List<Slot>
 )
 
-data class State(val weather: Weather?)
+data class State(val weather: Weather?, val place: String?)
 
 object Data {
     private const val PREFS = "gunluk"
@@ -47,10 +47,23 @@ object Data {
             .apply()
     }
 
+    fun setPlace(ctx: Context, name: String?) {
+        prefs(ctx).edit().putString("place", name).apply()
+    }
+
+    fun place(ctx: Context): String? = prefs(ctx).getString("place", null)
+
+    fun lastLocTry(ctx: Context): Long = prefs(ctx).getLong("locTry", 0L)
+
+    fun markLocTry(ctx: Context, t: Long) {
+        prefs(ctx).edit().putLong("locTry", t).apply()
+    }
+
     // ---- Okuma (önbellekten) ----
     fun load(ctx: Context): State {
-        val w = prefs(ctx).getString("wJson", null)?.let { parseWeather(it) }
-        return State(w)
+        val p = prefs(ctx)
+        val w = p.getString("wJson", null)?.let { parseWeather(it) }
+        return State(w, p.getString("place", null))
     }
 
     // ---- İnternetten çekme ----
