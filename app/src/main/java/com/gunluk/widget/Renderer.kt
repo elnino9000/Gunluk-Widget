@@ -360,7 +360,8 @@ object Renderer {
         c.drawArc(oval, 180f, 180f, false, p)
         p.pathEffect = null
         p.strokeWidth = 2.4f * dens
-        p.alpha = if (ph.day) 215 else 130
+        p.color = 0xFFF1D58A.toInt()
+        p.alpha = if (ph.day) 235 else 150
         if (ph.p > 0.003f) c.drawArc(oval, 180f, 180f * ph.p, false, p)
         p.alpha = 255
         p.style = Paint.Style.FILL
@@ -402,27 +403,51 @@ object Renderer {
             c.restoreToCount(layer)
         }
 
-        // 7) ufuk: tepeler (güneş/ay buraya batar), altı zaman çizelgesi zemini
-        val g = Path()
-        g.moveTo(0f, hy + hf * 0.015f)
-        g.cubicTo(wf * 0.25f, hy - hf * 0.035f, wf * 0.45f, hy + hf * 0.03f, wf * 0.65f, hy)
-        g.cubicTo(wf * 0.80f, hy - hf * 0.02f, wf * 0.92f, hy + hf * 0.015f, wf, hy - hf * 0.008f)
-        g.lineTo(wf, hf)
-        g.lineTo(0f, hf)
-        g.close()
+        // 7) ufuk: katmanlı tepeler (güneş/ay arkalarına batar), ön katman altın çizgili
+        val night = 0xFF080C1A.toInt()
+        fun ridge(y0: Float, a1: Float, a2: Float, a3: Float, a4: Float): Path = Path().apply {
+            moveTo(0f, y0 + hf * a1)
+            cubicTo(wf * 0.22f, y0 + hf * a2, wf * 0.42f, y0 + hf * a3, wf * 0.62f, y0 + hf * a4)
+            cubicTo(wf * 0.78f, y0 + hf * (a4 - 0.03f), wf * 0.90f, y0 + hf * (a1 - 0.02f), wf, y0 + hf * (a2 - 0.01f))
+            lineTo(wf, hf); lineTo(0f, hf); close()
+        }
+        // arka tepe
+        p.color = lerp(bot, night, 0.28f)
+        c.drawPath(ridge(hy, -0.045f, -0.085f, -0.020f, -0.060f), p)
+        // orta tepe
+        p.color = lerp(bot, night, 0.52f)
+        c.drawPath(ridge(hy, 0.000f, -0.050f, 0.012f, -0.022f), p)
+        // ön tepe: koyu zemin (zaman çizelgesi burada)
+        val front = ridge(hy, 0.020f, -0.012f, 0.030f, 0.004f)
         p.shader = LinearGradient(
-            0f, hy - hf * 0.04f, 0f, hf,
-            0x59000000, 0xA6000000.toInt(), Shader.TileMode.CLAMP
+            0f, hy - hf * 0.02f, 0f, hf,
+            lerp(bot, night, 0.74f), 0xF2060912.toInt(), Shader.TileMode.CLAMP
         )
-        c.drawPath(g, p)
+        c.drawPath(front, p)
         p.shader = null
+        // altın ince kenar çizgisi
+        val rim = Path().apply {
+            moveTo(0f, hy + hf * 0.020f)
+            cubicTo(wf * 0.22f, hy - hf * 0.012f, wf * 0.42f, hy + hf * 0.030f, wf * 0.62f, hy + hf * 0.004f)
+            cubicTo(wf * 0.78f, hy - hf * 0.026f, wf * 0.90f, hy + hf * 0.000f, wf, hy - hf * 0.022f)
+        }
+        p.style = Paint.Style.STROKE
+        p.strokeWidth = 1.1f * dens
+        p.shader = LinearGradient(
+            0f, 0f, wf, 0f,
+            intArrayOf(0x00E9C874, 0xCCE9C874.toInt(), 0xFFF6E1A6.toInt(), 0xCCE9C874.toInt(), 0x00E9C874),
+            null, Shader.TileMode.CLAMP
+        )
+        c.drawPath(rim, p)
+        p.shader = null
+        p.style = Paint.Style.FILL
 
         // 8) gün doğumu / batımı saatleri (iki uçta)
         val fmt = SimpleDateFormat("HH:mm", Locale.getDefault())
         val small = (hf * 0.062f).coerceIn(8f * dens, 11.5f * dens)
         val lp = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = 0xFFFFFFFF.toInt()
-            alpha = 190
+            color = 0xFFF1D58A.toInt()
+            alpha = 225
             textSize = small
             textAlign = Paint.Align.CENTER
             typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
@@ -430,6 +455,14 @@ object Renderer {
         val rowA = hy + hf * 0.085f
         c.drawText(fmt.format(Date(ph.sunrise * 1000)), cx - rx, rowA, lp)
         c.drawText(fmt.format(Date(ph.sunset * 1000)), cx + rx, rowA, lp)
+        val place = s.place
+        if (!place.isNullOrBlank()) {
+            lp.alpha = 255
+            lp.letterSpacing = 0.12f
+            val nm = place.uppercase(Locale("tr", "TR"))
+            fitText(lp, nm, rx * 1.2f, small, 7f * dens)
+            c.drawText(nm, cx, rowA, lp)
+        }
 
         val pad = min(wf * 0.045f, 16f * dens)
 

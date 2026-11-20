@@ -37,7 +37,7 @@
                 android:shadowDx="0"
                 android:shadowDy="1"
                 android:shadowRadius="4"
-                android:textColor="#F2FFFFFF"
+                android:textColor="#FFF1D58A"
                 android:textSize="13dp" />
 
             <TextClock
@@ -52,7 +52,7 @@
                 android:shadowDx="0"
                 android:shadowDy="2"
                 android:shadowRadius="8"
-                android:textColor="#FFFFFFFF"
+                android:textColor="#FFFFF4D6"
                 android:textSize="42dp" />
         </LinearLayout>
 
