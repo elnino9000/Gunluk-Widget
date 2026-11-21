@@ -29,7 +29,7 @@ data class State(
 
 object Data {
     private const val PREFS = "gunluk"
-    private const val VERSION = 7
+    private const val VERSION = 8
     private const val DEFAULT_LAT = 41.0082 // konum yoksa İstanbul
     private const val DEFAULT_LON = 28.9784
 
@@ -114,9 +114,9 @@ object Data {
 
         val (lat, lon) = coords(ctx)
         val base = "https://api.open-meteo.com/v1/forecast?latitude=$lat&longitude=$lon" +
-            "&current=temperature_2m,weather_code,cloud_cover" +
+            "&current=temperature_2m,weather_code,cloud_cover,precipitation" +
             "&daily=sunrise,sunset" +
-            "&hourly=temperature_2m,weather_code,cloud_cover" +
+            "&hourly=temperature_2m,weather_code,cloud_cover,precipitation" +
             "&timezone=auto&forecast_days=3"
         // Önce ECMWF (Avrupa Orta Vadeli Hava Tahmini Merkezi) modeli; olmazsa servisin varsayılan karışımı
         var json = httpGet("$base&models=ecmwf_ifs025")
@@ -203,7 +203,18 @@ object Data {
      * Hava kodu bazen "açık" derken gökyüzü bulutlu olabiliyor. Yağış/sis gibi kodlara dokunmadan,
      * sadece 0-3 (açık..kapalı) arasını bulut oranına göre düzeltir.
      */
-    private fun fixCode(code: Int, cloud: Int): Int {
+    private fun fixCode(code: Int, cloud: Int, precip: Double): Int {
+        // Model "yağmur/çiseleme/kar" derken ölçülebilir yağış yoksa (0.2 mm altı) yağış sayılmaz
+        val wet = code in 51..67 || code in 80..82 || code in 71..77 || code == 85 || code == 86
+        if (wet && precip >= 0.0 && precip < 0.2) {
+            return when {
+                cloud < 0 -> 2
+                cloud >= 85 -> 3
+                cloud >= 55 -> 2
+                cloud >= 20 -> 1
+                else -> 0
+            }
+        }
         if (code > 3 || cloud < 0) return code
         return when {
             cloud >= 85 -> 3
@@ -229,17 +240,18 @@ object Data {
                 val temps = hr.getJSONArray("temperature_2m")
                 val codes = hr.getJSONArray("weather_code")
                 val clouds = hr.optJSONArray("cloud_cover")
+                val precs = hr.optJSONArray("precipitation")
                 val n = minOf(times.length(), temps.length(), codes.length())
                 for (i in 0 until n) {
                     if (temps.isNull(i) || codes.isNull(i)) continue
                     val ep = LocalDateTime.parse(times.getString(i)).toEpochSecond(zone)
                     val cc = if (clouds != null && !clouds.isNull(i)) clouds.getInt(i) else -1
-                    hours.add(Slot(ep, temps.getDouble(i).roundToInt(), fixCode(codes.getInt(i), cc)))
+                    hours.add(Slot(ep, temps.getDouble(i).roundToInt(), fixCode(codes.getInt(i), cc, if (precs != null && !precs.isNull(i)) precs.getDouble(i) else -1.0)))
                 }
             }
             Weather(
                 cur.getDouble("temperature_2m").roundToInt(),
-                fixCode(cur.getInt("weather_code"), cur.optInt("cloud_cover", -1)),
+                fixCode(cur.getInt("weather_code"), cur.optInt("cloud_cover", -1), cur.optDouble("precipitation", -1.0)),
                 sr,
                 ss,
                 hours
