@@ -193,7 +193,7 @@ object Renderer {
             }
             w.temp >= 30 -> "ÇOK SICAK · SU İÇ"
             w.temp <= 5 -> "SOĞUK · MONT GİY"
-            w.code == 0 || w.code == 1 -> "AÇIK HAVA"
+            w.code == 0 -> "AÇIK HAVA"
             else -> conditionText(w.code).uppercase(TR)
         }
 
