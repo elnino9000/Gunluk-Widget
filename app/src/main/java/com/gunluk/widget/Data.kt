@@ -28,7 +28,7 @@ data class State(
 
 object Data {
     private const val PREFS = "gunluk"
-    private const val VERSION = 3
+    private const val VERSION = 4
     private const val DEFAULT_LAT = 41.0082 // konum yoksa İstanbul
     private const val DEFAULT_LON = 28.9784
 
@@ -73,9 +73,21 @@ object Data {
     // ---- Okuma (önbellekten) ----
     fun load(ctx: Context): State {
         val p = prefs(ctx)
-        val w = p.getString("wJson", null)?.let { parseWeather(it) }
-        return State(w, p.getString("place", null), p.getInt("theme", 0), p.getLong("wAt", 0L))
+        var w = p.getString("wJson", null)?.let { parseWeather(it) }
+        val at = p.getLong("wAt", 0L)
+        // veri eskiyse (artık kendiliğinden yenilenmiyor) şimdiki derece/simge saatlik tahminden alınır
+        if (w != null && System.currentTimeMillis() - at > 20 * 60_000L) {
+            val nowSec = System.currentTimeMillis() / 1000
+            val near = w.hours.minByOrNull { Math.abs(it.epoch - nowSec) }
+            if (near != null && Math.abs(near.epoch - nowSec) <= 90 * 60L) {
+                w = w.copy(temp = near.temp, code = near.code)
+            }
+        }
+        return State(w, p.getString("place", null), p.getInt("theme", 0), at)
     }
+
+    /** Önbellek eski biçimdeyse (uygulama güncellendi) bir kez yeniden çekilir */
+    fun needsMigration(ctx: Context): Boolean = prefs(ctx).getInt("wVer", 0) < VERSION
 
     // ---- İnternetten çekme ----
     @Synchronized
@@ -90,7 +102,7 @@ object Data {
             "&current=temperature_2m,weather_code" +
             "&daily=sunrise,sunset" +
             "&hourly=temperature_2m,weather_code" +
-            "&timezone=auto&forecast_days=2"
+            "&timezone=auto&forecast_days=3"
         val json = httpGet(url) ?: return false
         if (parseWeather(json) == null) return false
         p.edit().putString("wJson", json).putLong("wAt", now).putInt("wVer", VERSION).apply()

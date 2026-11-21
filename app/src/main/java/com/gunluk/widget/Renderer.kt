@@ -27,6 +27,8 @@ class Theme(val night: Boolean) {
     val bg: Int = if (night) 0xFF111111.toInt() else 0xFFF4F1EA.toInt()
     val text: Int = if (night) 0xFFF4EDE4.toInt() else 0xFF111111.toInt()
     val accent: Int = if (night) 0xFFE8283E.toInt() else 0xFFC8102E.toInt()
+    /** Alttaki saat yazıları: koyu zeminde parlak sarı, açık zeminde koyu turuncu */
+    val hour: Int = if (night) 0xFFFFC107.toInt() else 0xFFD35400.toInt()
 }
 
 /** Tasarım 340x200 birimlik bir tuval; u = bir birimin piksel karşılığı */
@@ -128,6 +130,13 @@ object Renderer {
 
     private fun precip(k: Kind) = k == Kind.RAIN || k == Kind.SNOW || k == Kind.STORM
 
+    private fun severity(sl: Slot, ph: Phase): Int = when (kindOfCode(sl.code, isNight(sl.epoch, ph))) {
+        Kind.STORM -> 3
+        Kind.SNOW -> 2
+        Kind.RAIN -> 1
+        else -> 0
+    }
+
     private fun eventName(k: Kind) = when (k) {
         Kind.SNOW -> "KAR"
         Kind.STORM -> "FIRTINA"
@@ -144,12 +153,22 @@ object Renderer {
         }
         val nowSec = nowMs / 1000
         val night = !ph.day
-        // en az 45 dk sonrası: 07:48 iken 09:00, 10:00, 11:00, 12:00, 13:00
-        val slots = w.hours.filter { it.epoch >= nowSec + 45 * 60 }.sortedBy { it.epoch }.take(5)
+        // en az 45 dk sonrası; 2'şer saatlik 5 kutu = sonraki 10 saat
+        val upcoming = w.hours.filter { it.epoch >= nowSec + 45 * 60 }.sortedBy { it.epoch }.take(10)
+        val slots = ArrayList<Slot>()
+        var i = 0
+        while (i < upcoming.size && slots.size < 5) {
+            val a = upcoming[i]
+            val b = upcoming.getOrNull(i + 1)
+            // atlanan saatte yağış varsa kaçmasın: iki saatin kötü olanının simgesi
+            val worse = if (b != null && severity(b, ph) > severity(a, ph)) b else a
+            slots.add(Slot(a.epoch, a.temp, worse.code))
+            i += 2
+        }
 
         val curKind = kindOfCode(w.code, night)
         val curPrecip = precip(curKind)
-        val ev = slots.filter { precip(kindOfCode(it.code, isNight(it.epoch, ph))) }
+        val ev = upcoming.filter { precip(kindOfCode(it.code, isNight(it.epoch, ph))) }
 
         val main = when {
             curPrecip -> curKind
@@ -452,20 +471,17 @@ object Renderer {
         val big = s.weather?.temp?.let { "$it°" } ?: "--°"
         val k = info.kind
         when (k) {
-            Kind.HOT -> drawKind(c, k, 222f, 44f, 2.8f, th)
-            else -> drawKind(c, k, 222f, 50f, 3.3f, th)
+            Kind.HOT -> drawKind(c, k, 232f, 48f, 2.0f, th)
+            else -> drawKind(c, k, 232f, 52f, 2.3f, th)
         }
         val tpBig = tp(42f, th.text, false, Paint.Align.LEFT)
         fitText(tpBig, big, 326f - 258f, 42f, 24f)
         c.drawText(big, 258f, 68f, tpBig)
 
-        // uyarı ve alt satır (solda), yüksek / düşük (sağda)
-        val warn = tp(12f, th.accent, true, Paint.Align.LEFT)
-        fitText(warn, info.warn, 168f, 12f, 7f)
-        c.drawText(info.warn, 14f, 108f, warn)
-        val sub = tp(11f, th.text, false, Paint.Align.LEFT)
-        fitText(sub, info.sub, 168f, 11f, 7f)
-        c.drawText(info.sub, 14f, 126f, sub)
+        // uyarı (solda), yüksek / düşük (sağda)
+        val warn = tp(13f, th.accent, true, Paint.Align.LEFT)
+        fitText(warn, info.warn, 168f, 13f, 7f)
+        c.drawText(info.warn, 14f, 118f, warn)
         if (info.hi != null && info.lo != null) {
             val hiT = "↑ ${info.hi}° YÜKSEK"
             val loT = "↓ ${info.lo}° DÜŞÜK"
@@ -484,14 +500,14 @@ object Renderer {
         line.strokeWidth = 0.8f
         c.drawLine(14f, 138f, 326f, 138f, line)
 
-        // sonraki 5 saat
+        // sonraki 10 saat (2'şer saatlik 5 kutu)
         val cxs = floatArrayOf(45f, 107f, 170f, 232f, 295f)
         for ((i, sl) in info.slots.withIndex()) {
             if (i >= cxs.size) break
             val cx = cxs[i]
             val sk = kindOfCode(sl.code, isNight(sl.epoch, ph))
             val hot = precip(sk)
-            val hp = tp(9f, th.accent, true, Paint.Align.CENTER)
+            val hp = tp(10f, th.hour, true, Paint.Align.CENTER)
             c.drawText(hourLabel(sl.epoch), cx, 161f, hp)
             drawKind(c, sk, cx - 14f, 177f, 1.1f, th)
             val tpT = tp(13f, if (hot) th.accent else th.text, true, Paint.Align.LEFT)

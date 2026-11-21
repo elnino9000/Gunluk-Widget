@@ -1,8 +1,5 @@
 package com.gunluk.widget
 
-import android.app.AlarmManager
-import android.app.job.JobInfo
-import android.app.job.JobScheduler
 import android.app.PendingIntent
 import android.appwidget.AppWidgetManager
 import android.appwidget.AppWidgetProvider
@@ -20,48 +17,6 @@ class WidgetProvider : AppWidgetProvider() {
 
     companion object {
         const val ACTION_REFRESH = "com.gunluk.widget.REFRESH"
-        const val ACTION_TICK = "com.gunluk.widget.TICK"
-        private const val TICK_MS = 10 * 60_000L
-        private const val JOB_ID = 4711
-
-        fun schedule(ctx: Context) {
-            val am = ctx.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-            am.setInexactRepeating(
-                AlarmManager.RTC,
-                System.currentTimeMillis() + TICK_MS,
-                TICK_MS,
-                tickIntent(ctx)
-            )
-        }
-
-        fun cancel(ctx: Context) {
-            val am = ctx.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-            am.cancel(tickIntent(ctx))
-        }
-
-        /** Veri gelmediyse bir dakika sonra yeniden dene */
-        private fun retrySoon(ctx: Context) {
-            val am = ctx.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-            am.setAndAllowWhileIdle(
-                AlarmManager.RTC,
-                System.currentTimeMillis() + 60_000L,
-                retryIntent(ctx)
-            )
-        }
-
-        private fun tickIntent(ctx: Context): PendingIntent {
-            val i = Intent(ctx, WidgetProvider::class.java).setAction(ACTION_TICK)
-            return PendingIntent.getBroadcast(
-                ctx, 0, i, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-            )
-        }
-
-        private fun retryIntent(ctx: Context): PendingIntent {
-            val i = Intent(ctx, WidgetProvider::class.java).setAction(ACTION_TICK)
-            return PendingIntent.getBroadcast(
-                ctx, 5, i, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-            )
-        }
 
         fun go(ctx: Context, force: Boolean, pending: BroadcastReceiver.PendingResult?) {
             val app = ctx.applicationContext
@@ -69,40 +24,27 @@ class WidgetProvider : AppWidgetProvider() {
                 try {
                     updateAll(app, force)
                 } catch (e: Exception) {
-                    // sessizce geç; bir sonraki turda tekrar denenir
+                    // sessizce geç; dokununca tekrar denenir
                 } finally {
                     pending?.finish()
                 }
             }
         }
 
-        /** Telefon uyurken bile sistemin düzenli çalıştırdığı iş (15 dk); alarm tek başına yetmiyor */
-        private fun ensureJob(ctx: Context) {
-            try {
-                val js = ctx.getSystemService(Context.JOB_SCHEDULER_SERVICE) as JobScheduler
-                if (js.getPendingJob(JOB_ID) != null) return
-                js.schedule(
-                    JobInfo.Builder(JOB_ID, ComponentName(ctx, RefreshJob::class.java))
-                        .setPeriodic(15 * 60_000L)
-                        .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
-                        .setPersisted(true)
-                        .build()
-                )
-            } catch (e: Exception) {
-                // iş kurulamazsa alarm yedek olarak çalışır
-            }
-        }
-
+        /**
+         * İnternet ve konum SADECE widget'a dokunulunca (force) kullanılır.
+         * Diğer zamanlarda yalnızca telefondaki kayıtlı veriyle yeniden çizilir (pil harcamaz).
+         * Tek istisna: hiç veri yoksa ya da uygulama yeni güncellendiyse bir kez çekilir.
+         */
         fun updateAll(ctx: Context, force: Boolean) {
-            ensureJob(ctx)
             val mgr = AppWidgetManager.getInstance(ctx)
             val ids = mgr.getAppWidgetIds(ComponentName(ctx, WidgetProvider::class.java))
             if (ids.isEmpty()) return
-            push(ctx, mgr, ids) // önce önbellekle hızlıca çiz
-            val moved = try { Loc.update(ctx) } catch (e: Exception) { false } // yer değiştiyse yeni konum
-            if (Data.refresh(ctx, force || moved)) push(ctx, mgr, ids)
-            else if (moved) push(ctx, mgr, ids)
-            if (Data.load(ctx).weather == null) retrySoon(ctx)
+            push(ctx, mgr, ids) // kayıtlı veriyle çiz
+            val st = Data.load(ctx)
+            if (!force && st.weather != null && !Data.needsMigration(ctx)) return
+            val moved = try { Loc.update(ctx) } catch (e: Exception) { false }
+            if (Data.refresh(ctx, true) || moved) push(ctx, mgr, ids)
         }
 
         private fun push(ctx: Context, mgr: AppWidgetManager, ids: IntArray) {
@@ -180,7 +122,6 @@ class WidgetProvider : AppWidgetProvider() {
     }
 
     override fun onUpdate(ctx: Context, mgr: AppWidgetManager, ids: IntArray) {
-        schedule(ctx)
         go(ctx, false, goAsync())
     }
 
@@ -190,22 +131,10 @@ class WidgetProvider : AppWidgetProvider() {
         go(ctx, false, goAsync())
     }
 
-    override fun onEnabled(ctx: Context) {
-        schedule(ctx)
-    }
-
-    override fun onDisabled(ctx: Context) {
-        cancel(ctx)
-    }
-
     override fun onReceive(ctx: Context, intent: Intent) {
         when (intent.action) {
             ACTION_REFRESH -> go(ctx, true, goAsync())
-            ACTION_TICK -> go(ctx, false, goAsync())
-            Intent.ACTION_BOOT_COMPLETED -> {
-                schedule(ctx)
-                go(ctx, false, goAsync())
-            }
+            Intent.ACTION_BOOT_COMPLETED -> go(ctx, false, goAsync())
             else -> super.onReceive(ctx, intent)
         }
     }
