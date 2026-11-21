@@ -29,7 +29,7 @@ data class State(
 
 object Data {
     private const val PREFS = "gunluk"
-    private const val VERSION = 6
+    private const val VERSION = 7
     private const val DEFAULT_LAT = 41.0082 // konum yoksa İstanbul
     private const val DEFAULT_LON = 28.9784
 
@@ -113,12 +113,14 @@ object Data {
         if (!need) return false
 
         val (lat, lon) = coords(ctx)
-        val url = "https://api.open-meteo.com/v1/forecast?latitude=$lat&longitude=$lon" +
+        val base = "https://api.open-meteo.com/v1/forecast?latitude=$lat&longitude=$lon" +
             "&current=temperature_2m,weather_code,cloud_cover" +
             "&daily=sunrise,sunset" +
             "&hourly=temperature_2m,weather_code,cloud_cover" +
             "&timezone=auto&forecast_days=3"
-        val json = httpGet(url) ?: return false
+        // Önce ECMWF (Avrupa Orta Vadeli Hava Tahmini Merkezi) modeli; olmazsa servisin varsayılan karışımı
+        var json = httpGet("$base&models=ecmwf_ifs025")
+        if (json == null || parseWeather(json) == null) json = httpGet(base) ?: return false
         if (parseWeather(json) == null) return false
         p.edit().putString("wJson", json).putLong("wAt", now).putInt("wVer", VERSION).apply()
         val ob = try { observe(lat, lon) } catch (e: Exception) { null }
