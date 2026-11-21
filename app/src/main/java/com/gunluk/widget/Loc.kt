@@ -94,6 +94,11 @@ object Loc {
             fresh(ctx)?.let { loc = it }
         }
         val l = loc ?: return false
+        if (Data.placeVersion(ctx) < 2) {
+            Data.setPlaceVersion(ctx, 2)
+            apply(ctx, l)
+            return true
+        }
         if (Data.hasCoords(ctx)) {
             val (lat, lon) = Data.coords(ctx)
             val out = FloatArray(1)

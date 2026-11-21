@@ -56,6 +56,13 @@ object Data {
         prefs(ctx).edit().putString("place", name).apply()
     }
 
+    /** Konum adı biçimi değişince (ilçe -> mahalle) bir kez yeniden bulunur */
+    fun placeVersion(ctx: Context): Int = prefs(ctx).getInt("placeV", 0)
+
+    fun setPlaceVersion(ctx: Context, v: Int) {
+        prefs(ctx).edit().putInt("placeV", v).apply()
+    }
+
     fun place(ctx: Context): String? = prefs(ctx).getString("place", null)
 
     fun theme(ctx: Context): Int = prefs(ctx).getInt("theme", 0)
