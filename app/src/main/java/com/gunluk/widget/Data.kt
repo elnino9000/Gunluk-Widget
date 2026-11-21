@@ -144,11 +144,11 @@ object Data {
 
     /**
      * Yakındaki havaalanı istasyonunun SON GERÇEK ÖLÇÜMÜ (METAR, aviationweather.gov).
-     * 60 km içinde ve 90 dakikadan yeni bir rapor yoksa null döner; o zaman tahmin modeli kullanılır.
+     * 30 km içinde ve 90 dakikadan yeni bir rapor yoksa null döner; o zaman tahmin modeli kullanılır.
      */
     private fun observe(lat: Double, lon: Double): Obs? {
         val url = "https://aviationweather.gov/api/data/metar?format=json&hours=2" +
-            "&bbox=${lat - 0.6},${lon - 0.75},${lat + 0.6},${lon + 0.75}"
+            "&bbox=${lat - 0.3},${lon - 0.4},${lat + 0.3},${lon + 0.4}"
         val body = httpGet(url) ?: return null
         val arr = try { JSONArray(body) } catch (e: Exception) { return null }
         val nowSec = System.currentTimeMillis() / 1000
@@ -159,7 +159,7 @@ object Data {
             if (!o.has("lat") || !o.has("lon") || !o.has("obsTime") || o.isNull("temp")) continue
             val d = km(lat, lon, o.getDouble("lat"), o.getDouble("lon"))
             val ageSec = nowSec - o.getLong("obsTime")
-            if (d > 60.0 || ageSec > 90 * 60L || ageSec < -600) continue
+            if (d > 30.0 || ageSec > 90 * 60L || ageSec < -600) continue
             val wx = o.optString("wxString", "")
             var cover = 0 // 0 açık, 1 az bulutlu, 2 bulutlu, 3 kapalı
             val cl = o.optJSONArray("clouds")
