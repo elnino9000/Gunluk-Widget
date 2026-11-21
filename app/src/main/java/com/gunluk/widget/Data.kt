@@ -28,7 +28,7 @@ data class State(
 
 object Data {
     private const val PREFS = "gunluk"
-    private const val VERSION = 4
+    private const val VERSION = 5
     private const val DEFAULT_LAT = 41.0082 // konum yoksa İstanbul
     private const val DEFAULT_LON = 28.9784
 
@@ -106,9 +106,9 @@ object Data {
 
         val (lat, lon) = coords(ctx)
         val url = "https://api.open-meteo.com/v1/forecast?latitude=$lat&longitude=$lon" +
-            "&current=temperature_2m,weather_code" +
+            "&current=temperature_2m,weather_code,cloud_cover" +
             "&daily=sunrise,sunset" +
-            "&hourly=temperature_2m,weather_code" +
+            "&hourly=temperature_2m,weather_code,cloud_cover" +
             "&timezone=auto&forecast_days=3"
         val json = httpGet(url) ?: return false
         if (parseWeather(json) == null) return false
@@ -129,6 +129,20 @@ object Data {
         }
     }
 
+    /**
+     * Hava kodu bazen "açık" derken gökyüzü bulutlu olabiliyor. Yağış/sis gibi kodlara dokunmadan,
+     * sadece 0-3 (açık..kapalı) arasını bulut oranına göre düzeltir.
+     */
+    private fun fixCode(code: Int, cloud: Int): Int {
+        if (code > 3 || cloud < 0) return code
+        return when {
+            cloud >= 85 -> 3
+            cloud >= 55 -> 2
+            cloud >= 20 -> 1
+            else -> 0
+        }
+    }
+
     private fun parseWeather(json: String): Weather? {
         return try {
             val o = JSONObject(json)
@@ -144,16 +158,18 @@ object Data {
                 val times = hr.getJSONArray("time")
                 val temps = hr.getJSONArray("temperature_2m")
                 val codes = hr.getJSONArray("weather_code")
+                val clouds = hr.optJSONArray("cloud_cover")
                 val n = minOf(times.length(), temps.length(), codes.length())
                 for (i in 0 until n) {
                     if (temps.isNull(i) || codes.isNull(i)) continue
                     val ep = LocalDateTime.parse(times.getString(i)).toEpochSecond(zone)
-                    hours.add(Slot(ep, temps.getDouble(i).roundToInt(), codes.getInt(i)))
+                    val cc = if (clouds != null && !clouds.isNull(i)) clouds.getInt(i) else -1
+                    hours.add(Slot(ep, temps.getDouble(i).roundToInt(), fixCode(codes.getInt(i), cc)))
                 }
             }
             Weather(
                 cur.getDouble("temperature_2m").roundToInt(),
-                cur.getInt("weather_code"),
+                fixCode(cur.getInt("weather_code"), cur.optInt("cloud_cover", -1)),
                 sr,
                 ss,
                 hours
