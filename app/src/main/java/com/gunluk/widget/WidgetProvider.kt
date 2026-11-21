@@ -43,7 +43,7 @@ class WidgetProvider : AppWidgetProvider() {
             push(ctx, mgr, ids) // kayıtlı veriyle çiz
             val st = Data.load(ctx)
             if (!force && st.weather != null && !Data.needsMigration(ctx)) return
-            val moved = try { Loc.update(ctx) } catch (e: Exception) { false }
+            val moved = try { Loc.update(ctx, force) } catch (e: Exception) { false }
             if (Data.refresh(ctx, true) || moved) push(ctx, mgr, ids)
         }
 

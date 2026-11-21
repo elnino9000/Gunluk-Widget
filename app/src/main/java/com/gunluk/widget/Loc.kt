@@ -42,26 +42,26 @@ object Loc {
     @SuppressLint("MissingPermission")
     private fun fresh(ctx: Context): Location? {
         if (Build.VERSION.SDK_INT < 30) return null
-        return try {
-            val lm = ctx.getSystemService(Context.LOCATION_SERVICE) as LocationManager
-            val provider = when {
-                lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER) -> LocationManager.NETWORK_PROVIDER
-                lm.isProviderEnabled(LocationManager.GPS_PROVIDER) -> LocationManager.GPS_PROVIDER
-                else -> return null
+        val lm = ctx.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        // sırayla dene: ağ konumu, GPS; biri boş dönerse diğerine geç
+        for (provider in listOf(LocationManager.NETWORK_PROVIDER, LocationManager.GPS_PROVIDER)) {
+            try {
+                if (!lm.isProviderEnabled(provider)) continue
+                val latch = CountDownLatch(1)
+                var result: Location? = null
+                val ex = Executors.newSingleThreadExecutor()
+                lm.getCurrentLocation(provider, null, ex) { loc ->
+                    result = loc
+                    latch.countDown()
+                }
+                latch.await(if (provider == LocationManager.GPS_PROVIDER) 6 else 5, TimeUnit.SECONDS)
+                ex.shutdown()
+                if (result != null) return result
+            } catch (e: Exception) {
+                // bu sağlayıcı olmadı, sonrakini dene
             }
-            val latch = CountDownLatch(1)
-            var result: Location? = null
-            val ex = Executors.newSingleThreadExecutor()
-            lm.getCurrentLocation(provider, null, ex) { loc ->
-                result = loc
-                latch.countDown()
-            }
-            latch.await(8, TimeUnit.SECONDS)
-            ex.shutdown()
-            result
-        } catch (e: Exception) {
-            null
         }
+        return null
     }
 
     /** Yeni konumu kaydet ve ilçe adını bul */
@@ -84,12 +84,13 @@ object Loc {
     }
 
     /** Arka plan turunda çağrılır. Yer değiştiyse true döner (hava yenilensin). */
-    fun update(ctx: Context): Boolean {
+    fun update(ctx: Context, force: Boolean = false): Boolean {
         if (!hasForeground(ctx) || !hasBackground(ctx)) return false
         val now = System.currentTimeMillis()
         var loc = lastKnown(ctx)
         val stale = loc == null || now - loc.time > FRESH_MS
-        if (stale && now - Data.lastLocTry(ctx) > TRY_EVERY_MS) {
+        // kullanıcı dokunduysa her zaman taze konum istenir (30 dk sınırı yok)
+        if (stale && (force || now - Data.lastLocTry(ctx) > TRY_EVERY_MS)) {
             Data.markLocTry(ctx, now)
             fresh(ctx)?.let { loc = it }
         }
