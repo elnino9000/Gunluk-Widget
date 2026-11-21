@@ -72,7 +72,11 @@ object Loc {
             @Suppress("DEPRECATION")
             val list = Geocoder(ctx, Locale("tr", "TR")).getFromLocation(l.latitude, l.longitude, 1)
             val a = list?.firstOrNull()
-            name = a?.subAdminArea ?: a?.locality ?: a?.adminArea
+            // önce mahalle (Şemikler), yoksa ilçe/şehir
+            val hood = a?.subLocality?.trim()
+                ?.removeSuffix(" Mahallesi")?.removeSuffix(" Mah.")?.removeSuffix(" Mah")
+                ?.takeIf { it.isNotEmpty() }
+            name = hood ?: a?.subAdminArea ?: a?.locality ?: a?.adminArea
         } catch (e: Exception) {
             // ilçe adı bulunamadı; koordinat yine de kayıtlı
         }
