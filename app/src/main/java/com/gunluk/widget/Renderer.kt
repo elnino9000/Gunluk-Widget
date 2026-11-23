@@ -198,7 +198,9 @@ object Renderer {
         }
 
         val cond = conditionText(w.code).lowercase(TR)
-        val sub = if (cond.isEmpty()) "Şimdi ${w.temp}°C" else "Şimdi ${w.temp}°C · $cond"
+        val base = if (cond.isEmpty()) "Şimdi ${w.temp}°C" else "Şimdi ${w.temp}°C · $cond"
+        // servisin bildirdiği anlık yağış miktarı olduğu gibi gösterilir (yorum katılmaz)
+        val sub = if (w.precip >= 0) "$base · ${String.format(Locale.US, "%.1f", w.precip)} mm" else base
 
         // günün en yüksek / en düşük sıcaklığı (bugünün saatlik verisi + şimdiki)
         val cal = Calendar.getInstance()

@@ -17,7 +17,8 @@ data class Weather(
     val code: Int,
     val sunrise: Long, // bugünün gün doğumu (epoch saniye)
     val sunset: Long,  // bugünün gün batımı (epoch saniye)
-    val hours: List<Slot>
+    val hours: List<Slot>,
+    val precip: Double = -1.0 // şu an düşen yağış (mm); -1 = bilinmiyor
 )
 
 data class State(
@@ -29,7 +30,7 @@ data class State(
 
 object Data {
     private const val PREFS = "gunluk"
-    private const val VERSION = 9
+    private const val VERSION = 10
     private const val DEFAULT_LAT = 41.0082 // konum yoksa İstanbul
     private const val DEFAULT_LON = 28.9784
 
@@ -95,7 +96,7 @@ object Data {
             val nowSec = System.currentTimeMillis() / 1000
             val near = w.hours.minByOrNull { Math.abs(it.epoch - nowSec) }
             if (near != null && Math.abs(near.epoch - nowSec) <= 90 * 60L) {
-                w = w.copy(temp = near.temp, code = near.code)
+                w = w.copy(temp = near.temp, code = near.code, precip = -1.0)
             }
         }
         return State(w, p.getString("place", null), p.getInt("theme", 0), at)
@@ -114,7 +115,7 @@ object Data {
 
         val (lat, lon) = coords(ctx)
         val base = "https://api.open-meteo.com/v1/forecast?latitude=$lat&longitude=$lon" +
-            "&current=temperature_2m,weather_code" +
+            "&current=temperature_2m,weather_code,precipitation" +
             "&daily=sunrise,sunset" +
             "&hourly=temperature_2m,weather_code" +
             "&timezone=auto&forecast_days=3"
@@ -226,7 +227,8 @@ object Data {
                 cur.getInt("weather_code"),
                 sr,
                 ss,
-                hours
+                hours,
+                if (cur.has("precipitation") && !cur.isNull("precipitation")) cur.getDouble("precipitation") else -1.0
             )
         } catch (e: Exception) {
             null
