@@ -88,7 +88,7 @@ object Data {
         val oAt = p.getLong("oAt", 0L)
         val observed = w != null && oAt > 0 && System.currentTimeMillis() - oAt <= 2 * 3600_000L
         if (observed && w != null) {
-            w = w.copy(temp = p.getInt("oTemp", w.temp), code = p.getInt("oCode", w.code))
+            w = w.copy(temp = p.getInt("oTemp", w.temp), code = p.getInt("oCode", w.code), precip = -1.0)
             return State(w, p.getString("place", null), p.getInt("theme", 0), at)
         }
         // veri eskiyse (artık kendiliğinden yenilenmiyor) şimdiki derece/simge saatlik tahminden alınır
